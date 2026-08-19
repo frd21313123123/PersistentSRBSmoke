@@ -51,7 +51,13 @@ namespace PersistentSRBSmoke
             _system.Play();
         }
 
-        public void Emit(Vector3 position, Vector3 up, Vector3 wind, float atmosphericFactor, float scale)
+        public void Emit(
+            Vector3 position,
+            Vector3 up,
+            Vector3 wind,
+            float atmosphericFactor,
+            float scale,
+            EngineSmokeProfile profile)
         {
             if (_system == null || atmosphericFactor <= 0f)
                 return;
@@ -63,25 +69,33 @@ namespace PersistentSRBSmoke
             Vector3 tangentB = Vector3.Cross(up, tangentA).normalized;
 
             float angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
-            float drift = UnityEngine.Random.Range(0.45f, 1.15f) * _settings.DriftSpeed;
+            float smallEngineScatter = Mathf.Lerp(1.18f, 1.0f, profile.Strength);
+            float drift = UnityEngine.Random.Range(0.45f, 1.15f)
+                * _settings.DriftSpeed
+                * smallEngineScatter;
             Vector3 sideways = (tangentA * Mathf.Cos(angle) + tangentB * Mathf.Sin(angle)) * drift;
             Vector3 velocity = wind + sideways + up * _settings.Buoyancy;
 
-            // SRB exhaust carries its own particulate mass. Ambient pressure affects how much the
-            // cloud expands, but it should not become almost invisible merely because the vehicle
-            // is high in the atmosphere.
             float opacityFactor = Mathf.Pow(Mathf.Clamp01(atmosphericFactor), 0.32f);
-            Color smokeColor = Color.Lerp(
-                new Color(0.54f, 0.52f, 0.49f, 1f),
-                new Color(0.95f, 0.94f, 0.91f, 1f),
-                UnityEngine.Random.value);
 
-            // A cloudlet is made from several intersecting translucent slices. Each individual
-            // slice therefore needs less alpha than the previous single-billboard renderer.
+            // EngineSmokeProfile supplies a deterministic base tint derived mainly from thrust.
+            // Add only a small per-particle brightness change so every puff is not identical.
+            float localBrightness = UnityEngine.Random.Range(0.82f, 1.08f);
+            Color smokeColor = new Color(
+                Mathf.Clamp01(profile.BaseColor.r * localBrightness),
+                Mathf.Clamp01(profile.BaseColor.g * localBrightness),
+                Mathf.Clamp01(profile.BaseColor.b * localBrightness),
+                1f);
+
+            // Six intersecting translucent density slices form one cloudlet, so per-slice alpha
+            // stays below the old single-billboard value. Small motors also get lower opacity.
             smokeColor.a = Mathf.Clamp01(
-                _settings.Opacity * 0.48f * opacityFactor * UnityEngine.Random.Range(0.88f, 1.08f));
+                _settings.Opacity
+                * 0.48f
+                * profile.OpacityMultiplier
+                * opacityFactor
+                * UnityEngine.Random.Range(0.88f, 1.08f));
 
-            // Lower ambient pressure gives the fresh exhaust room to expand more aggressively.
             float altitudeExpansion = Mathf.Lerp(
                 _settings.HighAltitudeSizeMultiplier,
                 1f,
@@ -90,17 +104,19 @@ namespace PersistentSRBSmoke
             var emit = new ParticleSystem.EmitParams();
             emit.position = position;
             emit.velocity = velocity;
-            emit.startLifetime = _settings.Lifetime * UnityEngine.Random.Range(0.90f, 1.10f);
-            emit.startSize = _settings.StartSize * scale * altitudeExpansion * UnityEngine.Random.Range(0.82f, 1.24f);
+            emit.startLifetime = _settings.Lifetime
+                * profile.LifetimeMultiplier
+                * UnityEngine.Random.Range(0.90f, 1.10f);
+            emit.startSize = _settings.StartSize
+                * scale
+                * profile.SizeMultiplier
+                * altitudeExpansion
+                * UnityEngine.Random.Range(0.82f, 1.24f);
             emit.startColor = smokeColor;
             emit.rotation = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
             _system.Emit(emit, 1);
         }
 
-        // Re-evaluates the velocity of already-existing smoke. Without this, each puff keeps only
-        // the wind vector it received at birth and the entire old trail looks frozen. Updating at
-        // a modest rate (configured in Settings.cfg) makes the plume shear, drift and broaden while
-        // keeping the cost predictable even with tens of thousands of particles.
         public void UpdateDynamicMotion(CelestialBody body, WindModel windModel, double universalTime, float dt)
         {
             if (_system == null || body == null || dt <= 0f)
@@ -142,17 +158,21 @@ namespace PersistentSRBSmoke
                     ? 0f
                     : Mathf.Clamp01(1f - particle.remainingLifetime / particle.startLifetime);
 
-                // Each particle has a stable divergence direction derived from its random seed.
-                // A slow Perlin wobble changes that direction with age, which keeps the plume from
-                // expanding as a mathematically perfect cylinder.
                 float seed = HashToUnit(particle.randomSeed);
                 float baseAngle = seed * Mathf.PI * 2f;
                 float wobble = (Mathf.PerlinNoise(seed * 19.7f + 3.1f, age * 2.2f + 7.4f) - 0.5f) * 1.35f;
                 float angle = baseAngle + wobble;
                 Vector3 divergenceDirection = tangentA * Mathf.Cos(angle) + tangentB * Mathf.Sin(angle);
 
-                float diffusion = _settings.DiffusionSpeed *
-                    (0.55f + _settings.DiffusionGrowth * Mathf.SmoothStep(0f, 1f, age));
+                // Short-lived smoke generally came from a smaller motor. Scale diffusion down a
+                // little so a separation motor does not grow into the same broad cloud as a main SRB.
+                float sourceScale = Mathf.Clamp(
+                    particle.startLifetime / Mathf.Max(0.01f, _settings.Lifetime),
+                    0.30f,
+                    1.10f);
+                float diffusion = _settings.DiffusionSpeed
+                    * Mathf.Lerp(0.62f, 1f, sourceScale)
+                    * (0.55f + _settings.DiffusionGrowth * Mathf.SmoothStep(0f, 1f, age));
                 Vector3 desiredVelocity = wind + divergenceDirection * diffusion + up * _settings.Buoyancy;
 
                 particle.velocity = Vector3.Lerp(particle.velocity, desiredVelocity, response);
@@ -180,8 +200,6 @@ namespace PersistentSRBSmoke
             var shape = system.shape;
             shape.enabled = false;
 
-            // Real SRB smoke entrains surrounding air very quickly. Most of the visible widening
-            // therefore happens in the first 20-60 seconds, not only near the end of particle life.
             var size = system.sizeOverLifetime;
             size.enabled = true;
             float g = Mathf.Max(1f, _settings.SizeGrowth);
@@ -200,9 +218,9 @@ namespace PersistentSRBSmoke
             gradient.SetKeys(
                 new[]
                 {
-                    new GradientColorKey(Color.white, 0f),
-                    new GradientColorKey(new Color(0.97f, 0.96f, 0.93f), 0.20f),
-                    new GradientColorKey(new Color(0.88f, 0.88f, 0.86f), 0.65f),
+                    new GradientColorKey(new Color(0.94f, 0.94f, 0.94f), 0f),
+                    new GradientColorKey(new Color(0.90f, 0.90f, 0.89f), 0.20f),
+                    new GradientColorKey(new Color(0.84f, 0.84f, 0.83f), 0.65f),
                     new GradientColorKey(new Color(0.76f, 0.77f, 0.77f), 1f)
                 },
                 new[]
@@ -225,10 +243,6 @@ namespace PersistentSRBSmoke
             noise.octaveCount = 2;
         }
 
-        // True EVE volumetrics use a ray-marched density field, but the Release 5 package is
-        // All Rights Reserved. This mesh is an original runtime-generated volumetric impostor:
-        // six differently oriented density slices intersect to form one cloudlet. It retains the
-        // current lightweight particle pipeline while giving the smoke depth from arbitrary views.
         private static Mesh CreateCloudletMesh()
         {
             Vector3[] normals =
