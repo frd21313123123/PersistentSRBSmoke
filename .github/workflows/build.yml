@@ -17,7 +17,7 @@ on:
         type: boolean
         default: false
       tag_name:
-        description: 'Tag / Release version (e.g. v0.1.0; if blank, uses .version file)'
+        description: 'Tag / Release version (e.g. v0.4.0; if blank, uses .version file)'
         required: false
         type: string
         default: ''
@@ -37,11 +37,18 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
+      - name: Validate Settings.cfg
+        shell: pwsh
+        run: ./scripts/validate-config.ps1
+
       - name: Restore NuGet packages
         run: msbuild PersistentSRBSmoke.sln /t:Restore /p:Configuration=Release /p:UseKspSkeletons=true
 
-      - name: Compile
-        run: msbuild PersistentSRBSmoke.sln /t:Build /p:Configuration=Release /p:UseKspSkeletons=true /p:RestorePackages=false
+      - name: Compile Debug
+        run: msbuild PersistentSRBSmoke.sln /t:Build /p:Configuration=Debug /p:UseKspSkeletons=true /p:RestorePackages=false /p:TreatWarningsAsErrors=true
+
+      - name: Compile Release
+        run: msbuild PersistentSRBSmoke.sln /t:Build /p:Configuration=Release /p:UseKspSkeletons=true /p:RestorePackages=false /p:TreatWarningsAsErrors=true
 
       - name: Package mod
         shell: pwsh
@@ -72,8 +79,12 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Restore and compile
-        run: msbuild PersistentSRBSmoke.sln /restore /t:Build /p:Configuration=Release /p:UseKspSkeletons=true
+      - name: Validate Settings.cfg
+        shell: pwsh
+        run: ./scripts/validate-config.ps1
+
+      - name: Restore and compile Release
+        run: msbuild PersistentSRBSmoke.sln /restore /t:Build /p:Configuration=Release /p:UseKspSkeletons=true /p:TreatWarningsAsErrors=true
 
       - name: Package and Publish Release
         shell: pwsh
