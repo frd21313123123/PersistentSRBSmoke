@@ -8,6 +8,12 @@ on:
     paths:
       - 'Shaders/**'
       - '.github/workflows/build-shaders.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'Shaders/**'
+      - '.github/workflows/build-shaders.yml'
 
 permissions:
   contents: read
