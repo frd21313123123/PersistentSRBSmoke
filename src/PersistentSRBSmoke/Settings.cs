@@ -62,11 +62,22 @@ namespace PersistentSRBSmoke
         public float TurbulenceStrength = 1.1f;
         public float TurbulenceFrequency = 0.055f;
 
-        // Near-pad hold. Fresh smoke should billow around the pad before upper-level wind takes it.
+        // Near-pad hold. Wind stays weak here so the whole cloud is not translated off the pad.
         public float NearGroundHoldHeight = 60f;
         public float NearGroundWindMultiplier = 0.12f;
         public float NearGroundDiffusionMultiplier = 0.25f;
         public float NearGroundBuoyancyMultiplier = 0.40f;
+
+        // Density-driven launch-pad cloud. Dense exhaust is pushed sideways across the ground while
+        // the thinning outer lobes curl upward, approximating the large Shuttle-style pad billow.
+        public bool PadCloudEnabled = true;
+        public float PadCloudHeight = 120f;
+        public float PadCloudCellSize = 18f;
+        public float PadCloudDensityThreshold = 5f;
+        public float PadCloudDensitySaturation = 24f;
+        public float PadCloudOutflowSpeed = 18f;
+        public float PadCloudUpdraftSpeed = 5.5f;
+        public float PadCloudGlobalBias = 0.72f;
 
         // Altitude-dependent wind shear
         public bool WindEnabled = true;
@@ -145,6 +156,15 @@ namespace PersistentSRBSmoke
                 settings.NearGroundDiffusionMultiplier = ReadFloat(node, "nearGroundDiffusionMultiplier", settings.NearGroundDiffusionMultiplier, 0f, 1f);
                 settings.NearGroundBuoyancyMultiplier = ReadFloat(node, "nearGroundBuoyancyMultiplier", settings.NearGroundBuoyancyMultiplier, 0f, 1f);
 
+                settings.PadCloudEnabled = ReadBool(node, "padCloudEnabled", settings.PadCloudEnabled);
+                settings.PadCloudHeight = ReadFloat(node, "padCloudHeight", settings.PadCloudHeight, 10f, 1000f);
+                settings.PadCloudCellSize = ReadFloat(node, "padCloudCellSize", settings.PadCloudCellSize, 2f, 100f);
+                settings.PadCloudDensityThreshold = ReadFloat(node, "padCloudDensityThreshold", settings.PadCloudDensityThreshold, 1f, 100f);
+                settings.PadCloudDensitySaturation = ReadFloat(node, "padCloudDensitySaturation", settings.PadCloudDensitySaturation, 2f, 300f);
+                settings.PadCloudOutflowSpeed = ReadFloat(node, "padCloudOutflowSpeed", settings.PadCloudOutflowSpeed, 0f, 80f);
+                settings.PadCloudUpdraftSpeed = ReadFloat(node, "padCloudUpdraftSpeed", settings.PadCloudUpdraftSpeed, 0f, 40f);
+                settings.PadCloudGlobalBias = ReadFloat(node, "padCloudGlobalBias", settings.PadCloudGlobalBias, 0f, 1f);
+
                 settings.WindEnabled = ReadBool(node, "windEnabled", settings.WindEnabled);
                 settings.WindSpeed = ReadFloat(node, "windSpeed", settings.WindSpeed, 0f, 80f);
                 settings.WindLayerHeight = ReadFloat(node, "windLayerHeight", settings.WindLayerHeight, 100f, 20000f);
@@ -161,6 +181,8 @@ namespace PersistentSRBSmoke
 
             if (settings.EngineMaxThrust <= settings.EngineMinThrust)
                 settings.EngineMaxThrust = settings.EngineMinThrust + 1f;
+            if (settings.PadCloudDensitySaturation <= settings.PadCloudDensityThreshold)
+                settings.PadCloudDensitySaturation = settings.PadCloudDensityThreshold + 1f;
 
             return settings;
         }
