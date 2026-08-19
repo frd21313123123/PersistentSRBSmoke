@@ -20,6 +20,14 @@ namespace PersistentSRBSmoke
         public float Opacity = 0.72f;
         public int MaxEmitPerFrame = 96;
         public float TeleportDistance = 750f;
+
+        public bool WindEnabled = true;
+        public float WindSpeed = 6.0f;
+        public float WindLayerHeight = 2200f;
+        public float WindTopAltitude = 24000f;
+        public float WindDirectionChangeRadians = 1.15f;
+        public float WindTimeScale = 0.0006f;
+
         public bool DebugLogging = false;
 
         public static SmokeSettings Load()
@@ -50,6 +58,14 @@ namespace PersistentSRBSmoke
                 settings.Opacity = ReadFloat(node, "opacity", settings.Opacity, 0.01f, 1f);
                 settings.MaxEmitPerFrame = ReadInt(node, "maxEmitPerFrame", settings.MaxEmitPerFrame, 1, 1000);
                 settings.TeleportDistance = ReadFloat(node, "teleportDistance", settings.TeleportDistance, 10f, 10000f);
+
+                settings.WindEnabled = ReadBool(node, "windEnabled", settings.WindEnabled);
+                settings.WindSpeed = ReadFloat(node, "windSpeed", settings.WindSpeed, 0f, 80f);
+                settings.WindLayerHeight = ReadFloat(node, "windLayerHeight", settings.WindLayerHeight, 100f, 20000f);
+                settings.WindTopAltitude = ReadFloat(node, "windTopAltitude", settings.WindTopAltitude, 1000f, 100000f);
+                settings.WindDirectionChangeRadians = ReadFloat(node, "windDirectionChangeRadians", settings.WindDirectionChangeRadians, 0f, 6.283185f);
+                settings.WindTimeScale = ReadFloat(node, "windTimeScale", settings.WindTimeScale, 0f, 0.05f);
+
                 settings.DebugLogging = ReadBool(node, "debugLogging", settings.DebugLogging);
             }
             catch (Exception ex)
