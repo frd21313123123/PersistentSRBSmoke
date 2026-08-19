@@ -15,6 +15,14 @@ namespace PersistentSRBSmoke
         public float DynamicMotionHz = 10f;
         public float TeleportDistance = 750f;
 
+        // KSP time warp / universal-time synchronization
+        public bool FollowUniversalTime = true;
+        public float MaxWarpSimulationStep = 5f;
+
+        // Suppress stock / legacy smoke so only this mod owns the persistent SRB trail.
+        public bool SuppressStockSmoke = true;
+        public float StockSmokeRefreshInterval = 0.75f;
+
         // Emission / continuity
         public float BaseEmissionRate = 32f;
         public float ParticlesPerMeter = 0.30f;
@@ -54,6 +62,12 @@ namespace PersistentSRBSmoke
         public float TurbulenceStrength = 1.1f;
         public float TurbulenceFrequency = 0.055f;
 
+        // Near-pad hold. Fresh smoke should billow around the pad before upper-level wind takes it.
+        public float NearGroundHoldHeight = 60f;
+        public float NearGroundWindMultiplier = 0.12f;
+        public float NearGroundDiffusionMultiplier = 0.25f;
+        public float NearGroundBuoyancyMultiplier = 0.40f;
+
         // Altitude-dependent wind shear
         public bool WindEnabled = true;
         public float WindSpeed = 7.0f;
@@ -85,6 +99,11 @@ namespace PersistentSRBSmoke
                 settings.MaxEmitPerFrame = ReadInt(node, "maxEmitPerFrame", settings.MaxEmitPerFrame, 1, 2000);
                 settings.DynamicMotionHz = ReadFloat(node, "dynamicMotionHz", settings.DynamicMotionHz, 1f, 30f);
                 settings.TeleportDistance = ReadFloat(node, "teleportDistance", settings.TeleportDistance, 10f, 10000f);
+
+                settings.FollowUniversalTime = ReadBool(node, "followUniversalTime", settings.FollowUniversalTime);
+                settings.MaxWarpSimulationStep = ReadFloat(node, "maxWarpSimulationStep", settings.MaxWarpSimulationStep, 0.25f, 30f);
+                settings.SuppressStockSmoke = ReadBool(node, "suppressStockSmoke", settings.SuppressStockSmoke);
+                settings.StockSmokeRefreshInterval = ReadFloat(node, "stockSmokeRefreshInterval", settings.StockSmokeRefreshInterval, 0.1f, 10f);
 
                 settings.BaseEmissionRate = ReadFloat(node, "baseEmissionRate", settings.BaseEmissionRate, 0f, 500f);
                 settings.ParticlesPerMeter = ReadFloat(node, "particlesPerMeter", settings.ParticlesPerMeter, 0f, 10f);
@@ -120,6 +139,11 @@ namespace PersistentSRBSmoke
                 settings.DynamicWindResponse = ReadFloat(node, "dynamicWindResponse", settings.DynamicWindResponse, 0f, 20f);
                 settings.TurbulenceStrength = ReadFloat(node, "turbulenceStrength", settings.TurbulenceStrength, 0f, 20f);
                 settings.TurbulenceFrequency = ReadFloat(node, "turbulenceFrequency", settings.TurbulenceFrequency, 0.001f, 2f);
+
+                settings.NearGroundHoldHeight = ReadFloat(node, "nearGroundHoldHeight", settings.NearGroundHoldHeight, 0f, 500f);
+                settings.NearGroundWindMultiplier = ReadFloat(node, "nearGroundWindMultiplier", settings.NearGroundWindMultiplier, 0f, 1f);
+                settings.NearGroundDiffusionMultiplier = ReadFloat(node, "nearGroundDiffusionMultiplier", settings.NearGroundDiffusionMultiplier, 0f, 1f);
+                settings.NearGroundBuoyancyMultiplier = ReadFloat(node, "nearGroundBuoyancyMultiplier", settings.NearGroundBuoyancyMultiplier, 0f, 1f);
 
                 settings.WindEnabled = ReadBool(node, "windEnabled", settings.WindEnabled);
                 settings.WindSpeed = ReadFloat(node, "windSpeed", settings.WindSpeed, 0f, 80f);
