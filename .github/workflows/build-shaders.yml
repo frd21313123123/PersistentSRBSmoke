@@ -1,0 +1,56 @@
+name: Build Volumetric Shader
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'Shaders/**'
+      - '.github/workflows/build-shaders.yml'
+
+permissions:
+  contents: read
+
+env:
+  UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+  UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+  UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+
+jobs:
+  shader:
+    name: Build raymarch .shab
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Explain missing Unity activation
+        if: env.UNITY_LICENSE == ''
+        run: |
+          echo "Unity activation secrets are not configured."
+          echo "Add UNITY_LICENSE, UNITY_EMAIL and UNITY_PASSWORD repository secrets, then rerun this workflow."
+          echo "The C# plugin still uses its native 3D slice-volume fallback without the .shab bundle."
+
+      - name: Build PersistentSRBSmokeVolumetric.shab
+        if: env.UNITY_LICENSE != ''
+        uses: KSPModdingLibs/KSPBuildTools/.github/actions/build-assetbundles@2efb3f61705d86d8527afc79c6e9312ab43ea7b9
+        with:
+          unity-version: '2019.4.18f1'
+          assetbundle-name: 'PersistentSRBSmokeVolumetric.shab'
+          asset-files: 'Shaders/PersistentSRBVolumetricSmoke.shader'
+          output-dir: 'GameData/PersistentSRBSmoke/Shaders'
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+
+      - name: Upload shader bundle
+        if: env.UNITY_LICENSE != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: PersistentSRBSmoke-VolumetricShader
+          path: GameData/PersistentSRBSmoke/Shaders/*.shab
+          if-no-files-found: error
+          retention-days: 30
