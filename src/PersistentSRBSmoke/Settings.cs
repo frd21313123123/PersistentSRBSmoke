@@ -9,11 +9,30 @@ namespace PersistentSRBSmoke
         public bool Enabled = true;
 
         // Performance / lifetime
-        public int MaxParticles = 48000;
+        public int MaxParticles = 36000;
         public float Lifetime = 210f;
-        public int MaxEmitPerFrame = 192;
-        public float DynamicMotionHz = 10f;
+        public int MaxEmitPerFrame = 160;
+        public float DynamicMotionHz = 6f;
         public float TeleportDistance = 750f;
+        public float EngineScanInterval = 2f;
+
+        // Render cost controls. Three crossed quads keep a cloudlet volumetric-looking while
+        // cutting transparent overdraw roughly in half compared with the old six-plane mesh.
+        public int CloudletPlanes = 3;
+        public bool SortParticles = false;
+
+        // Dynamic-motion LOD. Old/far particles keep their current velocity between updates and
+        // are refreshed less often; Unity still integrates their motion every frame.
+        public float DynamicMidAge = 0.20f;
+        public float DynamicOldAge = 0.55f;
+        public int DynamicMidStride = 2;
+        public int DynamicOldStride = 4;
+        public float DynamicFarDistance = 5000f;
+        public int DynamicFarStrideMultiplier = 2;
+
+        // Number of altitude samples used by the large-scale wind profile. Samples are interpolated
+        // smoothly; the local spreading field is analytic and does not require extra Perlin calls.
+        public int WindCacheLayers = 128;
 
         // KSP time warp / universal-time synchronization
         public bool FollowUniversalTime = true;
@@ -35,8 +54,8 @@ namespace PersistentSRBSmoke
         public float SizeGrowth = 18.0f;
         public float HighAltitudeSizeMultiplier = 1.85f;
         public float Opacity = 0.80f;
-        public float SmokeBrightness = 0.78f;
-        public float EngineColorVariation = 0.08f;
+        public float SmokeBrightness = 0.88f;
+        public float EngineColorVariation = 0.05f;
 
         // Engine-dependent smoke scaling. KSP engine thrust is measured in kN.
         public bool EngineScalingEnabled = true;
@@ -53,12 +72,13 @@ namespace PersistentSRBSmoke
         public float SmallEngineSpacingMultiplier = 2.40f;
         public float LargeEngineSpacingMultiplier = 0.95f;
 
-        // Local cloud motion / diffusion
+        // Local cloud motion / diffusion. This remains independent of the prevailing wind so smoke
+        // continues to widen at every altitude instead of behaving like a rigid ribbon.
         public float DriftSpeed = 1.8f;
-        public float DiffusionSpeed = 3.2f;
-        public float DiffusionGrowth = 1.55f;
+        public float DiffusionSpeed = 4.4f;
+        public float DiffusionGrowth = 1.95f;
         public float Buoyancy = 0.24f;
-        public float DynamicWindResponse = 2.4f;
+        public float DynamicWindResponse = 1.6f;
         public float TurbulenceStrength = 1.1f;
         public float TurbulenceFrequency = 0.055f;
 
@@ -79,13 +99,19 @@ namespace PersistentSRBSmoke
         public float PadCloudUpdraftSpeed = 5.5f;
         public float PadCloudGlobalBias = 0.72f;
 
-        // Altitude-dependent wind shear
+        // Continuous altitude-dependent wind. WindLayerHeight is now a broad vertical variation
+        // scale, not a hard layer boundary. WindSpread* controls large weak horizontal eddies that
+        // fan out the plume without drawing the trail into a visible sine-wave pattern.
         public bool WindEnabled = true;
-        public float WindSpeed = 7.0f;
-        public float WindLayerHeight = 1800f;
+        public float WindSpeed = 4.4f;
+        public float WindLayerHeight = 9000f;
         public float WindTopAltitude = 32000f;
-        public float WindDirectionChangeRadians = 1.15f;
-        public float WindTimeScale = 0.0006f;
+        public float WindDirectionChangeRadians = 0.30f;
+        public float WindTimeScale = 0.00012f;
+        public float WindSpreadSpeed = 1.0f;
+        public float WindSpreadScale = 850f;
+        public float WindSpreadVerticalScale = 2600f;
+        public float WindSpreadTimeScale = 0.00035f;
 
         public bool DebugLogging = false;
 
@@ -110,6 +136,16 @@ namespace PersistentSRBSmoke
                 settings.MaxEmitPerFrame = ReadInt(node, "maxEmitPerFrame", settings.MaxEmitPerFrame, 1, 2000);
                 settings.DynamicMotionHz = ReadFloat(node, "dynamicMotionHz", settings.DynamicMotionHz, 1f, 30f);
                 settings.TeleportDistance = ReadFloat(node, "teleportDistance", settings.TeleportDistance, 10f, 10000f);
+                settings.EngineScanInterval = ReadFloat(node, "engineScanInterval", settings.EngineScanInterval, 0.25f, 30f);
+                settings.CloudletPlanes = ReadInt(node, "cloudletPlanes", settings.CloudletPlanes, 2, 6);
+                settings.SortParticles = ReadBool(node, "sortParticles", settings.SortParticles);
+                settings.DynamicMidAge = ReadFloat(node, "dynamicMidAge", settings.DynamicMidAge, 0f, 0.95f);
+                settings.DynamicOldAge = ReadFloat(node, "dynamicOldAge", settings.DynamicOldAge, 0.01f, 1f);
+                settings.DynamicMidStride = ReadInt(node, "dynamicMidStride", settings.DynamicMidStride, 1, 16);
+                settings.DynamicOldStride = ReadInt(node, "dynamicOldStride", settings.DynamicOldStride, 1, 32);
+                settings.DynamicFarDistance = ReadFloat(node, "dynamicFarDistance", settings.DynamicFarDistance, 100f, 100000f);
+                settings.DynamicFarStrideMultiplier = ReadInt(node, "dynamicFarStrideMultiplier", settings.DynamicFarStrideMultiplier, 1, 16);
+                settings.WindCacheLayers = ReadInt(node, "windCacheLayers", settings.WindCacheLayers, 8, 512);
 
                 settings.FollowUniversalTime = ReadBool(node, "followUniversalTime", settings.FollowUniversalTime);
                 settings.MaxWarpSimulationStep = ReadFloat(node, "maxWarpSimulationStep", settings.MaxWarpSimulationStep, 0.25f, 30f);
@@ -171,6 +207,10 @@ namespace PersistentSRBSmoke
                 settings.WindTopAltitude = ReadFloat(node, "windTopAltitude", settings.WindTopAltitude, 1000f, 100000f);
                 settings.WindDirectionChangeRadians = ReadFloat(node, "windDirectionChangeRadians", settings.WindDirectionChangeRadians, 0f, 6.283185f);
                 settings.WindTimeScale = ReadFloat(node, "windTimeScale", settings.WindTimeScale, 0f, 0.05f);
+                settings.WindSpreadSpeed = ReadFloat(node, "windSpreadSpeed", settings.WindSpreadSpeed, 0f, 20f);
+                settings.WindSpreadScale = ReadFloat(node, "windSpreadScale", settings.WindSpreadScale, 30f, 5000f);
+                settings.WindSpreadVerticalScale = ReadFloat(node, "windSpreadVerticalScale", settings.WindSpreadVerticalScale, 80f, 20000f);
+                settings.WindSpreadTimeScale = ReadFloat(node, "windSpreadTimeScale", settings.WindSpreadTimeScale, 0f, 0.1f);
 
                 settings.DebugLogging = ReadBool(node, "debugLogging", settings.DebugLogging);
             }
@@ -183,6 +223,10 @@ namespace PersistentSRBSmoke
                 settings.EngineMaxThrust = settings.EngineMinThrust + 1f;
             if (settings.PadCloudDensitySaturation <= settings.PadCloudDensityThreshold)
                 settings.PadCloudDensitySaturation = settings.PadCloudDensityThreshold + 1f;
+            if (settings.DynamicOldAge < settings.DynamicMidAge)
+                settings.DynamicOldAge = settings.DynamicMidAge;
+            if (settings.DynamicOldStride < settings.DynamicMidStride)
+                settings.DynamicOldStride = settings.DynamicMidStride;
 
             return settings;
         }

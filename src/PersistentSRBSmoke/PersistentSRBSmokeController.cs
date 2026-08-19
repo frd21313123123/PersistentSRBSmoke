@@ -49,15 +49,17 @@ namespace PersistentSRBSmoke
             emission *= emitterShare;
             spacing *= Mathf.Sqrt(1f / emitterShare);
 
-            Color smallColor = new Color(0.36f, 0.33f, 0.30f, 1f);
-            Color largeColor = new Color(0.56f, 0.55f, 0.53f, 1f);
+            // SRB exhaust is predominantly neutral light grey/white in direct sunlight. Keep a
+            // subtle warm tint for small motors without the previous brown base colour.
+            Color smallColor = new Color(0.82f, 0.82f, 0.80f, 1f);
+            Color largeColor = new Color(0.95f, 0.95f, 0.94f, 1f);
             Color baseColor = Color.Lerp(smallColor, largeColor, curve);
 
             string engineName = engine != null && engine.part != null ? engine.part.name : string.Empty;
             float variation = (StableHashToUnit(engineName) * 2f - 1f) * settings.EngineColorVariation;
             baseColor.r *= 1f + variation;
             baseColor.g *= 1f + variation * 0.20f;
-            baseColor.b *= 1f - variation * 0.85f;
+            baseColor.b *= 1f - variation * 0.35f;
 
             float brightness = settings.SmokeBrightness;
             baseColor.r = Mathf.Clamp01(baseColor.r * brightness);
@@ -116,6 +118,8 @@ namespace PersistentSRBSmoke
 
         private readonly Dictionary<int, EngineEmitter> _emitters = new Dictionary<int, EngineEmitter>();
         private readonly HashSet<Part> _solidFuelParts = new HashSet<Part>();
+        private readonly HashSet<int> _seenEmitters = new HashSet<int>();
+        private readonly List<int> _emittersToRemove = new List<int>();
 
         private float _nextEngineScan;
         private float _nextDynamicMotion;
@@ -152,7 +156,13 @@ namespace PersistentSRBSmoke
                 _hasUniversalTime = true;
                 _pendingDynamicGameTime = 0.0;
 
-                Debug.Log("[PersistentSRBSmoke] v0.3.2 initialized with UT time-warp sync, pad hold and stock-smoke suppression.");
+                Version version = typeof(PersistentSRBSmokeController).Assembly.GetName().Version;
+                string versionText = version == null
+                    ? "unknown"
+                    : version.Major + "." + version.Minor + "." + version.Build;
+                Debug.Log(
+                    "[PersistentSRBSmoke] v" + versionText +
+                    " initialized with cached wind, dynamic LOD, UT time-warp sync, pad hold and stock-smoke suppression.");
             }
             catch (Exception ex)
             {
@@ -170,7 +180,7 @@ namespace PersistentSRBSmoke
             if (now >= _nextEngineScan)
             {
                 ScanEngines();
-                _nextEngineScan = now + 1.0f;
+                _nextEngineScan = now + _settings.EngineScanInterval;
             }
 
             float dt = Mathf.Max(0.001f, Time.fixedDeltaTime);
@@ -363,7 +373,7 @@ namespace PersistentSRBSmoke
 
         private void ScanEngines()
         {
-            var seen = new HashSet<int>();
+            _seenEmitters.Clear();
             _solidFuelParts.Clear();
 
             IList<Vessel> vessels = FlightGlobals.VesselsLoaded;
@@ -394,11 +404,11 @@ namespace PersistentSRBSmoke
                         {
                             float share = 1f / engine.thrustTransforms.Count;
                             for (int t = 0; t < engine.thrustTransforms.Count; t++)
-                                RegisterEmitter(engine, engine.thrustTransforms[t], seen, share);
+                                RegisterEmitter(engine, engine.thrustTransforms[t], _seenEmitters, share);
                         }
                         else
                         {
-                            RegisterEmitter(engine, part.transform, seen, 1f);
+                            RegisterEmitter(engine, part.transform, _seenEmitters, 1f);
                         }
                     }
 
@@ -407,15 +417,15 @@ namespace PersistentSRBSmoke
                 }
             }
 
-            var toRemove = new List<int>();
+            _emittersToRemove.Clear();
             foreach (KeyValuePair<int, EngineEmitter> pair in _emitters)
             {
-                if (!seen.Contains(pair.Key))
-                    toRemove.Add(pair.Key);
+                if (!_seenEmitters.Contains(pair.Key))
+                    _emittersToRemove.Add(pair.Key);
             }
 
-            for (int i = 0; i < toRemove.Count; i++)
-                _emitters.Remove(toRemove[i]);
+            for (int i = 0; i < _emittersToRemove.Count; i++)
+                _emitters.Remove(_emittersToRemove[i]);
         }
 
         private void RegisterEmitter(ModuleEngines engine, Transform transform, HashSet<int> seen, float emitterShare)
@@ -555,6 +565,8 @@ namespace PersistentSRBSmoke
 
             _wind = null;
             _solidFuelParts.Clear();
+            _seenEmitters.Clear();
+            _emittersToRemove.Clear();
             _emitters.Clear();
         }
     }

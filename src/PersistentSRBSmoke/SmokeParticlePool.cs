@@ -15,6 +15,7 @@ namespace PersistentSRBSmoke
         private readonly Mesh _cloudletMesh;
         private readonly PadCloudDensityField _padCloud;
         private bool _floatingOriginRegistered;
+        private int _dynamicUpdateIndex;
 
         public int ParticleCount { get { return _system == null ? 0 : _system.particleCount; } }
 
@@ -33,12 +34,14 @@ namespace PersistentSRBSmoke
             ParticleSystemRenderer renderer = _gameObject.GetComponent<ParticleSystemRenderer>();
             _texture = CreateSmokeTexture(160);
             _material = CreateParticleMaterial(_texture);
-            _cloudletMesh = CreateCloudletMesh();
+            _cloudletMesh = CreateCloudletMesh(_settings.CloudletPlanes);
 
             renderer.material = _material;
             renderer.renderMode = ParticleSystemRenderMode.Mesh;
             renderer.mesh = _cloudletMesh;
-            renderer.sortMode = ParticleSystemSortMode.Distance;
+            renderer.sortMode = _settings.SortParticles
+                ? ParticleSystemSortMode.Distance
+                : ParticleSystemSortMode.None;
 
             try
             {
@@ -92,7 +95,7 @@ namespace PersistentSRBSmoke
 
             float opacityFactor = Mathf.Pow(Mathf.Clamp01(atmosphericFactor), 0.32f);
 
-            float localBrightness = UnityEngine.Random.Range(0.82f, 1.08f);
+            float localBrightness = UnityEngine.Random.Range(0.88f, 1.06f);
             Color smokeColor = new Color(
                 Mathf.Clamp01(profile.BaseColor.r * localBrightness),
                 Mathf.Clamp01(profile.BaseColor.g * localBrightness),
@@ -185,10 +188,20 @@ namespace PersistentSRBSmoke
             if (count <= 0)
                 return;
 
+            _dynamicUpdateIndex = (_dynamicUpdateIndex + 1) & 0x3FFFFFFF;
+
             Vector3 bodyCenter = body.transform.position;
             Vector3 bodyNorth = body.transform.up;
             float bodyRadius = (float)body.Radius;
-            float response = 1f - Mathf.Exp(-Mathf.Max(0f, _settings.DynamicWindResponse) * dt);
+            float responseRate = Mathf.Max(0f, _settings.DynamicWindResponse);
+
+            if (windModel != null)
+                windModel.Prepare(body, universalTime);
+
+            Camera camera = Camera.main;
+            bool hasCamera = camera != null;
+            Vector3 cameraPosition = hasCamera ? camera.transform.position : Vector3.zero;
+            float farDistanceSqr = _settings.DynamicFarDistance * _settings.DynamicFarDistance;
 
             // Build one coarse density field per dynamic update. Only cloudlets near the captured
             // launch surface enter the grid, so the long upper-atmosphere trail is unaffected.
@@ -209,6 +222,18 @@ namespace PersistentSRBSmoke
                 if (radialMagnitude < 1f)
                     continue;
 
+                float age = particle.startLifetime <= 0.001f
+                    ? 0f
+                    : Mathf.Clamp01(1f - particle.remainingLifetime / particle.startLifetime);
+
+                int updateStride = GetDynamicUpdateStride(age, particle.position, hasCamera, cameraPosition, farDistanceSqr);
+                if (updateStride > 1)
+                {
+                    int phase = (int)(particle.randomSeed % (uint)updateStride);
+                    if (((_dynamicUpdateIndex + phase) % updateStride) != 0)
+                        continue;
+                }
+
                 Vector3 up = radial / radialMagnitude;
                 float altitude = Mathf.Max(0f, radialMagnitude - bodyRadius);
                 Vector3 wind = windModel == null
@@ -223,14 +248,12 @@ namespace PersistentSRBSmoke
                 tangentA.Normalize();
                 Vector3 tangentB = Vector3.Cross(up, tangentA).normalized;
 
-                float age = particle.startLifetime <= 0.001f
-                    ? 0f
-                    : Mathf.Clamp01(1f - particle.remainingLifetime / particle.startLifetime);
-
+                // Cheap deterministic curl-like wobble. This replaces a Mathf.PerlinNoise call for
+                // every particle while preserving coherent, seed-stable divergence over lifetime.
                 float seed = HashToUnit(particle.randomSeed);
-                float baseAngle = seed * Mathf.PI * 2f;
-                float wobble = (Mathf.PerlinNoise(seed * 19.7f + 3.1f, age * 2.2f + 7.4f) - 0.5f) * 1.35f;
-                float angle = baseAngle + wobble;
+                float wobble = Mathf.Sin(seed * 37.1f + age * 13.2f) * 0.46f
+                    + Mathf.Sin(seed * 91.7f - age * 7.3f) * 0.21f;
+                float angle = seed * Mathf.PI * 2f + wobble;
                 Vector3 divergenceDirection = tangentA * Mathf.Cos(angle) + tangentB * Mathf.Sin(angle);
 
                 float sourceScale = Mathf.Clamp(
@@ -261,11 +284,34 @@ namespace PersistentSRBSmoke
                     + up * (_settings.Buoyancy * buoyancyScale)
                     + padFlow;
 
+                // Account for the dynamic ticks skipped by LOD so older/far particles converge to
+                // the current flow field at approximately the same physical response rate.
+                float effectiveDt = dt * updateStride;
+                float response = 1f - Mathf.Exp(-responseRate * effectiveDt);
                 particle.velocity = Vector3.Lerp(particle.velocity, desiredVelocity, response);
                 _particleBuffer[i] = particle;
             }
 
             _system.SetParticles(_particleBuffer, count);
+        }
+
+        private int GetDynamicUpdateStride(
+            float normalizedAge,
+            Vector3 position,
+            bool hasCamera,
+            Vector3 cameraPosition,
+            float farDistanceSqr)
+        {
+            int stride = 1;
+            if (normalizedAge >= _settings.DynamicOldAge)
+                stride = Mathf.Max(1, _settings.DynamicOldStride);
+            else if (normalizedAge >= _settings.DynamicMidAge)
+                stride = Mathf.Max(1, _settings.DynamicMidStride);
+
+            if (hasCamera && (position - cameraPosition).sqrMagnitude >= farDistanceSqr)
+                stride *= Mathf.Max(1, _settings.DynamicFarStrideMultiplier);
+
+            return Mathf.Clamp(stride, 1, 64);
         }
 
         private float GetGroundBlend(float heightAboveGround)
@@ -313,10 +359,10 @@ namespace PersistentSRBSmoke
             gradient.SetKeys(
                 new[]
                 {
-                    new GradientColorKey(new Color(0.94f, 0.94f, 0.94f), 0f),
-                    new GradientColorKey(new Color(0.90f, 0.90f, 0.89f), 0.20f),
-                    new GradientColorKey(new Color(0.84f, 0.84f, 0.83f), 0.65f),
-                    new GradientColorKey(new Color(0.76f, 0.77f, 0.77f), 1f)
+                    new GradientColorKey(new Color(0.98f, 0.98f, 0.97f), 0f),
+                    new GradientColorKey(new Color(0.94f, 0.94f, 0.93f), 0.20f),
+                    new GradientColorKey(new Color(0.88f, 0.89f, 0.89f), 0.65f),
+                    new GradientColorKey(new Color(0.80f, 0.82f, 0.83f), 1f)
                 },
                 new[]
                 {
@@ -338,7 +384,7 @@ namespace PersistentSRBSmoke
             noise.octaveCount = 2;
         }
 
-        private static Mesh CreateCloudletMesh()
+        private static Mesh CreateCloudletMesh(int requestedPlanes)
         {
             Vector3[] normals =
             {
@@ -350,11 +396,12 @@ namespace PersistentSRBSmoke
                 new Vector3(1f, -1f, 1f).normalized
             };
 
-            var vertices = new List<Vector3>(normals.Length * 4);
-            var uvs = new List<Vector2>(normals.Length * 4);
-            var triangles = new List<int>(normals.Length * 6);
+            int planeCount = Mathf.Clamp(requestedPlanes, 2, normals.Length);
+            var vertices = new List<Vector3>(planeCount * 4);
+            var uvs = new List<Vector2>(planeCount * 4);
+            var triangles = new List<int>(planeCount * 6);
 
-            for (int i = 0; i < normals.Length; i++)
+            for (int i = 0; i < planeCount; i++)
             {
                 Vector3 normal = normals[i];
                 Vector3 reference = Mathf.Abs(Vector3.Dot(normal, Vector3.up)) > 0.88f

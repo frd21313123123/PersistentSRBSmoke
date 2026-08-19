@@ -22,8 +22,17 @@ namespace PersistentSRBSmoke
                 return;
 
             int key = part.GetInstanceID();
-            var targets = new List<Component>();
+            List<Component> cached;
+            if (_cachedTargets.TryGetValue(key, out cached) && cached != null && cached.Count > 0)
+            {
+                // Suppression also removes destroyed entries. If at least one target survives there
+                // is no need to run GetComponentsInChildren and smoke-name inspection again.
+                SuppressTargets(cached, true);
+                if (cached.Count > 0)
+                    return;
+            }
 
+            var targets = new List<Component>();
             Component[] components = part.gameObject.GetComponentsInChildren<Component>(true);
             for (int i = 0; i < components.Length; i++)
             {
@@ -35,7 +44,7 @@ namespace PersistentSRBSmoke
             }
 
             _cachedTargets[key] = targets;
-            SuppressTargets(targets);
+            SuppressTargets(targets, true);
         }
 
         public void SuppressCached(IEnumerable<Part> parts)
@@ -50,7 +59,11 @@ namespace PersistentSRBSmoke
 
                 List<Component> targets;
                 if (_cachedTargets.TryGetValue(part.GetInstanceID(), out targets))
-                    SuppressTargets(targets);
+                {
+                    // LateUpdate runs every frame. Avoid repeated reflection here; the deeper legacy
+                    // property reset is performed by RefreshPart at the configured refresh interval.
+                    SuppressTargets(targets, false);
+                }
             }
         }
 
@@ -134,7 +147,7 @@ namespace PersistentSRBSmoke
                 || value.IndexOf("smoke trail", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        private static void SuppressTargets(List<Component> targets)
+        private static void SuppressTargets(List<Component> targets, bool deepLegacyReset)
         {
             if (targets == null)
                 return;
@@ -165,11 +178,15 @@ namespace PersistentSRBSmoke
                 }
 
                 // KSPParticleEmitter and several SmokeScreen-era wrappers are legacy components.
-                // Reflection keeps the mod compatible without taking a hard dependency on them.
-                TrySetMember(component, "emit", false);
-                TrySetMember(component, "emissionRate", 0f);
-                TrySetMember(component, "minEmission", 0f);
-                TrySetMember(component, "maxEmission", 0f);
+                // Reflection keeps the mod compatible without taking a hard dependency on them,
+                // but only perform these relatively expensive lookups on the periodic deep refresh.
+                if (deepLegacyReset)
+                {
+                    TrySetMember(component, "emit", false);
+                    TrySetMember(component, "emissionRate", 0f);
+                    TrySetMember(component, "minEmission", 0f);
+                    TrySetMember(component, "maxEmission", 0f);
+                }
 
                 Behaviour behaviour = component as Behaviour;
                 if (behaviour != null)
