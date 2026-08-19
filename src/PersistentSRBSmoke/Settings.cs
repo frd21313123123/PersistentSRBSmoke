@@ -15,6 +15,14 @@ namespace PersistentSRBSmoke
         public float DynamicMotionHz = 10f;
         public float TeleportDistance = 750f;
 
+        // KSP time warp / universal-time synchronization
+        public bool FollowUniversalTime = true;
+        public float MaxWarpSimulationStep = 5f;
+
+        // Suppress stock / legacy smoke so only this mod owns the persistent SRB trail.
+        public bool SuppressStockSmoke = true;
+        public float StockSmokeRefreshInterval = 0.75f;
+
         // Emission / continuity
         public float BaseEmissionRate = 32f;
         public float ParticlesPerMeter = 0.30f;
@@ -27,6 +35,23 @@ namespace PersistentSRBSmoke
         public float SizeGrowth = 18.0f;
         public float HighAltitudeSizeMultiplier = 1.85f;
         public float Opacity = 0.80f;
+        public float SmokeBrightness = 0.78f;
+        public float EngineColorVariation = 0.08f;
+
+        // Engine-dependent smoke scaling. KSP engine thrust is measured in kN.
+        public bool EngineScalingEnabled = true;
+        public float EngineMinThrust = 8f;
+        public float EngineMaxThrust = 800f;
+        public float SmallEngineEmissionMultiplier = 0.18f;
+        public float LargeEngineEmissionMultiplier = 1.10f;
+        public float SmallEngineSizeMultiplier = 0.38f;
+        public float LargeEngineSizeMultiplier = 1.10f;
+        public float SmallEngineLifetimeMultiplier = 0.45f;
+        public float LargeEngineLifetimeMultiplier = 1.00f;
+        public float SmallEngineOpacityMultiplier = 0.72f;
+        public float LargeEngineOpacityMultiplier = 1.00f;
+        public float SmallEngineSpacingMultiplier = 2.40f;
+        public float LargeEngineSpacingMultiplier = 0.95f;
 
         // Local cloud motion / diffusion
         public float DriftSpeed = 1.8f;
@@ -36,6 +61,23 @@ namespace PersistentSRBSmoke
         public float DynamicWindResponse = 2.4f;
         public float TurbulenceStrength = 1.1f;
         public float TurbulenceFrequency = 0.055f;
+
+        // Near-pad hold. Wind stays weak here so the whole cloud is not translated off the pad.
+        public float NearGroundHoldHeight = 60f;
+        public float NearGroundWindMultiplier = 0.12f;
+        public float NearGroundDiffusionMultiplier = 0.25f;
+        public float NearGroundBuoyancyMultiplier = 0.40f;
+
+        // Density-driven launch-pad cloud. Dense exhaust is pushed sideways across the ground while
+        // the thinning outer lobes curl upward, approximating the large Shuttle-style pad billow.
+        public bool PadCloudEnabled = true;
+        public float PadCloudHeight = 120f;
+        public float PadCloudCellSize = 18f;
+        public float PadCloudDensityThreshold = 5f;
+        public float PadCloudDensitySaturation = 24f;
+        public float PadCloudOutflowSpeed = 18f;
+        public float PadCloudUpdraftSpeed = 5.5f;
+        public float PadCloudGlobalBias = 0.72f;
 
         // Altitude-dependent wind shear
         public bool WindEnabled = true;
@@ -69,6 +111,11 @@ namespace PersistentSRBSmoke
                 settings.DynamicMotionHz = ReadFloat(node, "dynamicMotionHz", settings.DynamicMotionHz, 1f, 30f);
                 settings.TeleportDistance = ReadFloat(node, "teleportDistance", settings.TeleportDistance, 10f, 10000f);
 
+                settings.FollowUniversalTime = ReadBool(node, "followUniversalTime", settings.FollowUniversalTime);
+                settings.MaxWarpSimulationStep = ReadFloat(node, "maxWarpSimulationStep", settings.MaxWarpSimulationStep, 0.25f, 30f);
+                settings.SuppressStockSmoke = ReadBool(node, "suppressStockSmoke", settings.SuppressStockSmoke);
+                settings.StockSmokeRefreshInterval = ReadFloat(node, "stockSmokeRefreshInterval", settings.StockSmokeRefreshInterval, 0.1f, 10f);
+
                 settings.BaseEmissionRate = ReadFloat(node, "baseEmissionRate", settings.BaseEmissionRate, 0f, 500f);
                 settings.ParticlesPerMeter = ReadFloat(node, "particlesPerMeter", settings.ParticlesPerMeter, 0f, 10f);
                 settings.MaxParticleSpacing = ReadFloat(node, "maxParticleSpacing", settings.MaxParticleSpacing, 0.25f, 25f);
@@ -79,6 +126,22 @@ namespace PersistentSRBSmoke
                 settings.SizeGrowth = ReadFloat(node, "sizeGrowth", settings.SizeGrowth, 1f, 40f);
                 settings.HighAltitudeSizeMultiplier = ReadFloat(node, "highAltitudeSizeMultiplier", settings.HighAltitudeSizeMultiplier, 1f, 5f);
                 settings.Opacity = ReadFloat(node, "opacity", settings.Opacity, 0.01f, 1f);
+                settings.SmokeBrightness = ReadFloat(node, "smokeBrightness", settings.SmokeBrightness, 0.2f, 1.4f);
+                settings.EngineColorVariation = ReadFloat(node, "engineColorVariation", settings.EngineColorVariation, 0f, 0.3f);
+
+                settings.EngineScalingEnabled = ReadBool(node, "engineScalingEnabled", settings.EngineScalingEnabled);
+                settings.EngineMinThrust = ReadFloat(node, "engineMinThrust", settings.EngineMinThrust, 0.1f, 5000f);
+                settings.EngineMaxThrust = ReadFloat(node, "engineMaxThrust", settings.EngineMaxThrust, 0.2f, 20000f);
+                settings.SmallEngineEmissionMultiplier = ReadFloat(node, "smallEngineEmissionMultiplier", settings.SmallEngineEmissionMultiplier, 0.01f, 3f);
+                settings.LargeEngineEmissionMultiplier = ReadFloat(node, "largeEngineEmissionMultiplier", settings.LargeEngineEmissionMultiplier, 0.01f, 3f);
+                settings.SmallEngineSizeMultiplier = ReadFloat(node, "smallEngineSizeMultiplier", settings.SmallEngineSizeMultiplier, 0.05f, 3f);
+                settings.LargeEngineSizeMultiplier = ReadFloat(node, "largeEngineSizeMultiplier", settings.LargeEngineSizeMultiplier, 0.05f, 3f);
+                settings.SmallEngineLifetimeMultiplier = ReadFloat(node, "smallEngineLifetimeMultiplier", settings.SmallEngineLifetimeMultiplier, 0.05f, 2f);
+                settings.LargeEngineLifetimeMultiplier = ReadFloat(node, "largeEngineLifetimeMultiplier", settings.LargeEngineLifetimeMultiplier, 0.05f, 2f);
+                settings.SmallEngineOpacityMultiplier = ReadFloat(node, "smallEngineOpacityMultiplier", settings.SmallEngineOpacityMultiplier, 0.05f, 2f);
+                settings.LargeEngineOpacityMultiplier = ReadFloat(node, "largeEngineOpacityMultiplier", settings.LargeEngineOpacityMultiplier, 0.05f, 2f);
+                settings.SmallEngineSpacingMultiplier = ReadFloat(node, "smallEngineSpacingMultiplier", settings.SmallEngineSpacingMultiplier, 0.2f, 10f);
+                settings.LargeEngineSpacingMultiplier = ReadFloat(node, "largeEngineSpacingMultiplier", settings.LargeEngineSpacingMultiplier, 0.2f, 10f);
 
                 settings.DriftSpeed = ReadFloat(node, "driftSpeed", settings.DriftSpeed, 0f, 20f);
                 settings.DiffusionSpeed = ReadFloat(node, "diffusionSpeed", settings.DiffusionSpeed, 0f, 30f);
@@ -87,6 +150,20 @@ namespace PersistentSRBSmoke
                 settings.DynamicWindResponse = ReadFloat(node, "dynamicWindResponse", settings.DynamicWindResponse, 0f, 20f);
                 settings.TurbulenceStrength = ReadFloat(node, "turbulenceStrength", settings.TurbulenceStrength, 0f, 20f);
                 settings.TurbulenceFrequency = ReadFloat(node, "turbulenceFrequency", settings.TurbulenceFrequency, 0.001f, 2f);
+
+                settings.NearGroundHoldHeight = ReadFloat(node, "nearGroundHoldHeight", settings.NearGroundHoldHeight, 0f, 500f);
+                settings.NearGroundWindMultiplier = ReadFloat(node, "nearGroundWindMultiplier", settings.NearGroundWindMultiplier, 0f, 1f);
+                settings.NearGroundDiffusionMultiplier = ReadFloat(node, "nearGroundDiffusionMultiplier", settings.NearGroundDiffusionMultiplier, 0f, 1f);
+                settings.NearGroundBuoyancyMultiplier = ReadFloat(node, "nearGroundBuoyancyMultiplier", settings.NearGroundBuoyancyMultiplier, 0f, 1f);
+
+                settings.PadCloudEnabled = ReadBool(node, "padCloudEnabled", settings.PadCloudEnabled);
+                settings.PadCloudHeight = ReadFloat(node, "padCloudHeight", settings.PadCloudHeight, 10f, 1000f);
+                settings.PadCloudCellSize = ReadFloat(node, "padCloudCellSize", settings.PadCloudCellSize, 2f, 100f);
+                settings.PadCloudDensityThreshold = ReadFloat(node, "padCloudDensityThreshold", settings.PadCloudDensityThreshold, 1f, 100f);
+                settings.PadCloudDensitySaturation = ReadFloat(node, "padCloudDensitySaturation", settings.PadCloudDensitySaturation, 2f, 300f);
+                settings.PadCloudOutflowSpeed = ReadFloat(node, "padCloudOutflowSpeed", settings.PadCloudOutflowSpeed, 0f, 80f);
+                settings.PadCloudUpdraftSpeed = ReadFloat(node, "padCloudUpdraftSpeed", settings.PadCloudUpdraftSpeed, 0f, 40f);
+                settings.PadCloudGlobalBias = ReadFloat(node, "padCloudGlobalBias", settings.PadCloudGlobalBias, 0f, 1f);
 
                 settings.WindEnabled = ReadBool(node, "windEnabled", settings.WindEnabled);
                 settings.WindSpeed = ReadFloat(node, "windSpeed", settings.WindSpeed, 0f, 80f);
@@ -101,6 +178,11 @@ namespace PersistentSRBSmoke
             {
                 Debug.LogError("[PersistentSRBSmoke] Failed to load settings: " + ex);
             }
+
+            if (settings.EngineMaxThrust <= settings.EngineMinThrust)
+                settings.EngineMaxThrust = settings.EngineMinThrust + 1f;
+            if (settings.PadCloudDensitySaturation <= settings.PadCloudDensityThreshold)
+                settings.PadCloudDensitySaturation = settings.PadCloudDensityThreshold + 1f;
 
             return settings;
         }
