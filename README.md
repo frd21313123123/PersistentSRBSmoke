@@ -16,7 +16,7 @@ When `PersistentSRBSmoke/VolumetricSmoke` is available from the optional `.shab`
 
 The shader in `Shaders/PersistentSRBVolumetricSmoke.shader` implements procedural 3D FBM density, erosion, primary ray marching, Kerbol shadow marching, dual-lobe Henyey-Greenstein scattering, Beer-Lambert extinction, Beer-Powder response, multiple-scattering fill, sky ambient, ground bounce and depth fading.
 
-The shader bundle is built with **KSPBuildTools + Unity 2019.4.18f1** and loaded in KSP by **Shabby**. `.github/workflows/build-shaders.yml` is already configured; GitHub needs `UNITY_LICENSE`, `UNITY_EMAIL` and `UNITY_PASSWORD` repository secrets to compile the `.shab` artifact.
+The shader bundle is built with **KSPBuildTools + Unity 2019.4.18f1** and loaded in KSP by **Shabby**. `.github/workflows/build-shaders.yml` is already configured. GitHub needs `UNITY_LICENSE`, `UNITY_EMAIL` and `UNITY_PASSWORD` repository secrets to compile the `.shab` artifact. Until that one-time Unity activation is configured, test ZIPs use the native slice-volume fallback below.
 
 ### Native 3D slice-volume fallback
 
