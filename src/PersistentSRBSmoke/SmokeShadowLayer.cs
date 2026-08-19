@@ -6,12 +6,12 @@ using UnityEngine;
 namespace PersistentSRBSmoke
 {
     /// <summary>
-    /// Cheap projected shadow for the long-lived SRB smoke trail.
+    /// Soft projected shadow for the long-lived SRB smoke trail.
     ///
-    /// Transparent Shuriken particles do not produce a useful soft world shadow in KSP, so this
-    /// layer samples the existing persistent smoke, projects a subset of cloudlets along sunlight
-    /// onto the active body's terrain surface and builds a soft shadow mesh synchronized with the
-    /// visible particle trail.
+    /// The visible geometry is rebuilt in LateUpdate so it follows the particle trail every rendered
+    /// frame. Expensive PQS terrain-height queries are cached in coarse surface cells and only a small
+    /// number of new cells are resolved per frame. This keeps motion smooth without turning a long
+    /// shadow into hundreds of PQS calls every frame.
     /// </summary>
     [KSPAddon(KSPAddon.Startup.Flight, false)]
     public sealed class SmokeShadowLayer : MonoBehaviour
@@ -19,8 +19,6 @@ namespace PersistentSRBSmoke
         private sealed class ShadowSettings
         {
             public bool Enabled = true;
-            // 0 = rebuild once per rendered frame. Positive values are an optional FPS cap for
-            // users who prefer cheaper shadows on slow hardware.
             public float UpdateHz = 0f;
             public int MaxQuads = 1800;
             public int SampleStride = 8;
@@ -32,6 +30,9 @@ namespace PersistentSRBSmoke
             public float SurfaceOffset = 4.0f;
             public float MinSourceAlpha = 0.025f;
             public float MinSunDot = 0.055f;
+            public int TerrainQueriesPerFrame = 32;
+            public float TerrainCacheMeters = 220f;
+            public int TerrainCacheCapacity = 12000;
             public float SizeGrowth = 18.0f;
             public int SourceMaxParticles = 36000;
             public bool DebugLogging = false;
@@ -60,6 +61,9 @@ namespace PersistentSRBSmoke
                     settings.SurfaceOffset = ReadFloat(node, "smokeShadowSurfaceOffset", settings.SurfaceOffset, 0.1f, 50f);
                     settings.MinSourceAlpha = ReadFloat(node, "smokeShadowMinSourceAlpha", settings.MinSourceAlpha, 0f, 1f);
                     settings.MinSunDot = ReadFloat(node, "smokeShadowMinSunDot", settings.MinSunDot, 0f, 0.5f);
+                    settings.TerrainQueriesPerFrame = ReadInt(node, "smokeShadowTerrainQueriesPerFrame", settings.TerrainQueriesPerFrame, 0, 512);
+                    settings.TerrainCacheMeters = ReadFloat(node, "smokeShadowTerrainCacheMeters", settings.TerrainCacheMeters, 20f, 5000f);
+                    settings.TerrainCacheCapacity = ReadInt(node, "smokeShadowTerrainCacheCapacity", settings.TerrainCacheCapacity, 256, 100000);
                     settings.SizeGrowth = ReadFloat(node, "sizeGrowth", settings.SizeGrowth, 1f, 40f);
                     settings.SourceMaxParticles = ReadInt(node, "maxParticles", settings.SourceMaxParticles, 1000, 150000);
                     settings.DebugLogging = ReadBool(node, "debugLogging", settings.DebugLogging);
@@ -99,6 +103,12 @@ namespace PersistentSRBSmoke
             }
         }
 
+        private sealed class TerrainCacheEntry
+        {
+            public double SurfaceAltitude;
+            public int LastUsedFrame;
+        }
+
         private ShadowSettings _settings;
         private ParticleSystem _sourceSystem;
         private ParticleSystem.Particle[] _particleBuffer;
@@ -115,10 +125,14 @@ namespace PersistentSRBSmoke
         private readonly List<Vector2> _uvs = new List<Vector2>(8192);
         private readonly List<Color32> _colors = new List<Color32>(8192);
         private readonly List<int> _triangles = new List<int>(12288);
+        private readonly Dictionary<long, TerrainCacheEntry> _terrainCache = new Dictionary<long, TerrainCacheEntry>();
 
         private float _nextUpdate;
         private float _nextSourceSearch;
         private float _nextDebugLog;
+        private int _frameIndex;
+        private int _terrainQueriesRemaining;
+        private int _terrainQueriesUsedThisFrame;
 
         private void Start()
         {
@@ -157,9 +171,6 @@ namespace PersistentSRBSmoke
             if (_sourceSystem == null)
                 return;
 
-            // Frame-synchronised is the default. A positive smokeShadowUpdateHz remains available
-            // as an explicit performance cap, but zero follows the visible Shuriken trail every
-            // rendered frame and therefore cannot visibly jump between 3 Hz mesh rebuilds.
             if (_settings.UpdateHz > 0.001f)
             {
                 if (now < _nextUpdate)
@@ -182,6 +193,9 @@ namespace PersistentSRBSmoke
                 return;
             }
 
+            _frameIndex = (_frameIndex + 1) & 0x3FFFFFFF;
+            _terrainQueriesRemaining = Mathf.Max(0, _settings.TerrainQueriesPerFrame);
+            _terrainQueriesUsedThisFrame = 0;
             UpdateShadowMesh(body, sun);
         }
 
@@ -236,9 +250,14 @@ namespace PersistentSRBSmoke
             }
             lightTravelDirection.Normalize();
 
-            int dynamicStride = Mathf.Max(
-                _settings.SampleStride,
-                Mathf.CeilToInt(count / (float)Mathf.Max(1, _settings.MaxQuads)));
+            // Seed-based sampling remains stable as the trail grows, avoiding a full visual reshuffle
+            // whenever an index-based dynamic stride changes by one.
+            float strideProbability = 1f / Mathf.Max(1, _settings.SampleStride);
+            float capacityProbability = (_settings.MaxQuads * 1.35f) / Mathf.Max(1f, count);
+            float sampleProbability = Mathf.Clamp01(Mathf.Min(strideProbability, capacityProbability));
+            uint sampleThreshold = sampleProbability >= 0.999999f
+                ? uint.MaxValue
+                : (uint)(sampleProbability * uint.MaxValue);
 
             _vertices.Clear();
             _uvs.Clear();
@@ -246,9 +265,14 @@ namespace PersistentSRBSmoke
             _triangles.Clear();
 
             int emitted = 0;
-            for (int i = 0; i < count && emitted < _settings.MaxQuads; i += dynamicStride)
+            int candidates = 0;
+            for (int i = 0; i < count && emitted < _settings.MaxQuads; i++)
             {
                 ParticleSystem.Particle particle = _particleBuffer[i];
+                if (Hash32(particle.randomSeed ^ 0xB5297A4DU) > sampleThreshold)
+                    continue;
+                candidates++;
+
                 if (particle.remainingLifetime <= 0f || particle.startLifetime <= 0.001f)
                     continue;
 
@@ -353,8 +377,10 @@ namespace PersistentSRBSmoke
             {
                 Debug.Log(
                     "[PersistentSRBSmoke] Shadow quads=" + emitted +
+                    " candidates=" + candidates +
                     " sourceParticles=" + count +
-                    " stride=" + dynamicStride);
+                    " terrainCache=" + _terrainCache.Count +
+                    " pqsQueries=" + _terrainQueriesUsedThisFrame);
                 _nextDebugLog = Time.realtimeSinceStartup + 5f;
             }
         }
@@ -365,6 +391,7 @@ namespace PersistentSRBSmoke
                 return;
 
             _parentBody = body;
+            _terrainCache.Clear();
             _shadowObject.transform.SetParent(body.transform, false);
             _shadowObject.transform.localPosition = Vector3.zero;
             _shadowObject.transform.localRotation = Quaternion.identity;
@@ -402,7 +429,6 @@ namespace PersistentSRBSmoke
             _colors.Add(color);
             _colors.Add(color);
 
-            // Two-sided quad. Terrain/camera orientation can flip across the curved body.
             _triangles.Add(baseIndex + 0);
             _triangles.Add(baseIndex + 1);
             _triangles.Add(baseIndex + 2);
@@ -451,23 +477,9 @@ namespace PersistentSRBSmoke
             double latitude = body.GetLatitude(roughPointD);
             double longitude = body.GetLongitude(roughPointD);
 
-            double surfaceAltitude = 0.0;
-            if (body.pqsController != null)
-            {
-                double latRadians = latitude * Math.PI / 180.0;
-                double lonRadians = longitude * Math.PI / 180.0;
-                Vector3d surfaceRadial = new Vector3d(
-                    Math.Cos(latRadians) * Math.Cos(lonRadians),
-                    Math.Sin(latRadians),
-                    Math.Cos(latRadians) * Math.Sin(lonRadians));
-
-                double surfaceHeight = body.pqsController.GetSurfaceHeight(surfaceRadial);
-                surfaceAltitude = surfaceHeight - body.pqsController.radius;
-                if (double.IsNaN(surfaceAltitude) || double.IsInfinity(surfaceAltitude))
-                    surfaceAltitude = 0.0;
-                if (body.ocean && surfaceAltitude < 0.0)
-                    surfaceAltitude = 0.0;
-            }
+            double surfaceAltitude;
+            if (!TryGetSurfaceAltitude(body, latitude, longitude, out surfaceAltitude))
+                return false;
 
             Vector3d worldSurface = body.GetWorldSurfacePosition(latitude, longitude, surfaceAltitude);
             Vector3d normalD = body.GetSurfaceNVector(latitude, longitude);
@@ -477,6 +489,126 @@ namespace PersistentSRBSmoke
             Vector3 toSun = -lightTravelDirection;
             sunDot = Mathf.Clamp01(Vector3.Dot(groundNormal, toSun));
             return sunDot > 0f;
+        }
+
+        private bool TryGetSurfaceAltitude(
+            CelestialBody body,
+            double latitude,
+            double longitude,
+            out double surfaceAltitude)
+        {
+            surfaceAltitude = 0.0;
+            if (body == null || body.pqsController == null)
+                return true;
+
+            int latCell;
+            int lonCell;
+            GetTerrainCell(body, latitude, longitude, out latCell, out lonCell);
+            long key = PackTerrainKey(latCell, lonCell);
+
+            TerrainCacheEntry entry;
+            if (_terrainCache.TryGetValue(key, out entry))
+            {
+                entry.LastUsedFrame = _frameIndex;
+                surfaceAltitude = entry.SurfaceAltitude;
+                return true;
+            }
+
+            TerrainCacheEntry neighbour = null;
+            for (int y = -1; y <= 1; y++)
+            {
+                for (int x = -1; x <= 1; x++)
+                {
+                    if (x == 0 && y == 0)
+                        continue;
+                    long neighbourKey = PackTerrainKey(latCell + y, lonCell + x);
+                    if (_terrainCache.TryGetValue(neighbourKey, out neighbour))
+                    {
+                        neighbour.LastUsedFrame = _frameIndex;
+                        surfaceAltitude = neighbour.SurfaceAltitude;
+                        break;
+                    }
+                }
+                if (neighbour != null)
+                    break;
+            }
+
+            if (_terrainQueriesRemaining <= 0)
+                return neighbour != null;
+
+            _terrainQueriesRemaining--;
+            _terrainQueriesUsedThisFrame++;
+            surfaceAltitude = QuerySurfaceAltitude(body, latitude, longitude);
+
+            if (_terrainCache.Count >= _settings.TerrainCacheCapacity)
+                TrimTerrainCache();
+
+            _terrainCache[key] = new TerrainCacheEntry
+            {
+                SurfaceAltitude = surfaceAltitude,
+                LastUsedFrame = _frameIndex
+            };
+            return true;
+        }
+
+        private double QuerySurfaceAltitude(CelestialBody body, double latitude, double longitude)
+        {
+            double latRadians = latitude * Math.PI / 180.0;
+            double lonRadians = longitude * Math.PI / 180.0;
+            Vector3d surfaceRadial = new Vector3d(
+                Math.Cos(latRadians) * Math.Cos(lonRadians),
+                Math.Sin(latRadians),
+                Math.Cos(latRadians) * Math.Sin(lonRadians));
+
+            double surfaceHeight = body.pqsController.GetSurfaceHeight(surfaceRadial);
+            double surfaceAltitude = surfaceHeight - body.pqsController.radius;
+            if (double.IsNaN(surfaceAltitude) || double.IsInfinity(surfaceAltitude))
+                surfaceAltitude = 0.0;
+            if (body.ocean && surfaceAltitude < 0.0)
+                surfaceAltitude = 0.0;
+            return surfaceAltitude;
+        }
+
+        private void GetTerrainCell(
+            CelestialBody body,
+            double latitude,
+            double longitude,
+            out int latCell,
+            out int lonCell)
+        {
+            double radius = Math.Max(1.0, body.Radius);
+            double cellDegrees = Math.Max(
+                1e-7,
+                _settings.TerrainCacheMeters / radius * 180.0 / Math.PI);
+
+            double normalizedLongitude = longitude;
+            while (normalizedLongitude < -180.0) normalizedLongitude += 360.0;
+            while (normalizedLongitude >= 180.0) normalizedLongitude -= 360.0;
+
+            latCell = (int)Math.Floor((latitude + 90.0) / cellDegrees);
+            lonCell = (int)Math.Floor((normalizedLongitude + 180.0) / cellDegrees);
+        }
+
+        private static long PackTerrainKey(int latCell, int lonCell)
+        {
+            return ((long)latCell << 32) ^ (uint)lonCell;
+        }
+
+        private void TrimTerrainCache()
+        {
+            int staleFrame = _frameIndex - 600;
+            var staleKeys = new List<long>();
+            foreach (KeyValuePair<long, TerrainCacheEntry> pair in _terrainCache)
+            {
+                if (pair.Value.LastUsedFrame < staleFrame)
+                    staleKeys.Add(pair.Key);
+            }
+
+            for (int i = 0; i < staleKeys.Count; i++)
+                _terrainCache.Remove(staleKeys[i]);
+
+            if (_terrainCache.Count >= _settings.TerrainCacheCapacity)
+                _terrainCache.Clear();
         }
 
         private static float EvaluateTrailAlpha(float age)
@@ -510,14 +642,19 @@ namespace PersistentSRBSmoke
             return Mathf.Lerp(k3, growth, Mathf.SmoothStep(0f, 1f, (age - 0.45f) / 0.55f));
         }
 
-        private static float HashToUnit(uint value)
+        private static uint Hash32(uint value)
         {
             value ^= value >> 17;
             value *= 0xed5ad4bbU;
             value ^= value >> 11;
             value *= 0xac4c1b51U;
             value ^= value >> 15;
-            return (value & 0x00FFFFFFU) / 16777215f;
+            return value;
+        }
+
+        private static float HashToUnit(uint value)
+        {
+            return (Hash32(value) & 0x00FFFFFFU) / 16777215f;
         }
 
         private static Material CreateShadowMaterial(Texture2D texture)
@@ -531,10 +668,6 @@ namespace PersistentSRBSmoke
             Material material = new Material(shader);
             material.name = "PersistentSRBSmoke.ProjectedShadowMaterial";
             material.mainTexture = texture;
-
-            // Terrain/opaque geometry is already drawn, while the smoke particle materials normally
-            // live at Transparent (3000). Rendering the projected shadow just before them prevents
-            // the dark mesh from being composited on top of the smoke itself.
             material.renderQueue = 2990;
             if (material.HasProperty("_TintColor"))
                 material.SetColor("_TintColor", Color.white);
@@ -586,6 +719,7 @@ namespace PersistentSRBSmoke
             _uvs.Clear();
             _colors.Clear();
             _triangles.Clear();
+            _terrainCache.Clear();
 
             if (_mesh != null) UnityEngine.Object.Destroy(_mesh);
             if (_material != null) UnityEngine.Object.Destroy(_material);
