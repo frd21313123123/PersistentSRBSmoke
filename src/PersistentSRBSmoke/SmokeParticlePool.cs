@@ -57,7 +57,8 @@ namespace PersistentSRBSmoke
             Vector3 wind,
             float atmosphericFactor,
             float scale,
-            EngineSmokeProfile profile)
+            EngineSmokeProfile profile,
+            float heightAboveGround)
         {
             if (_system == null || atmosphericFactor <= 0f)
                 return;
@@ -74,12 +75,21 @@ namespace PersistentSRBSmoke
                 * _settings.DriftSpeed
                 * smallEngineScatter;
             Vector3 sideways = (tangentA * Mathf.Cos(angle) + tangentB * Mathf.Sin(angle)) * drift;
-            Vector3 velocity = wind + sideways + up * _settings.Buoyancy;
+
+            // Around the launch pad the visible SRB cloud is massive and inertial. Keep wind and
+            // lateral diffusion weak for the first ~50-60 m AGL, then smoothly blend into the
+            // normal free-atmosphere motion model.
+            float groundBlend = GetGroundBlend(heightAboveGround);
+            float windScale = Mathf.Lerp(_settings.NearGroundWindMultiplier, 1f, groundBlend);
+            float diffusionScale = Mathf.Lerp(_settings.NearGroundDiffusionMultiplier, 1f, groundBlend);
+            float buoyancyScale = Mathf.Lerp(_settings.NearGroundBuoyancyMultiplier, 1f, groundBlend);
+
+            Vector3 velocity = wind * windScale
+                + sideways * diffusionScale
+                + up * (_settings.Buoyancy * buoyancyScale);
 
             float opacityFactor = Mathf.Pow(Mathf.Clamp01(atmosphericFactor), 0.32f);
 
-            // EngineSmokeProfile supplies a deterministic base tint derived mainly from thrust.
-            // Add only a small per-particle brightness change so every puff is not identical.
             float localBrightness = UnityEngine.Random.Range(0.82f, 1.08f);
             Color smokeColor = new Color(
                 Mathf.Clamp01(profile.BaseColor.r * localBrightness),
@@ -87,8 +97,6 @@ namespace PersistentSRBSmoke
                 Mathf.Clamp01(profile.BaseColor.b * localBrightness),
                 1f);
 
-            // Six intersecting translucent density slices form one cloudlet, so per-slice alpha
-            // stays below the old single-billboard value. Small motors also get lower opacity.
             smokeColor.a = Mathf.Clamp01(
                 _settings.Opacity
                 * 0.48f
@@ -117,7 +125,56 @@ namespace PersistentSRBSmoke
             _system.Emit(emit, 1);
         }
 
-        public void UpdateDynamicMotion(CelestialBody body, WindModel windModel, double universalTime, float dt)
+        /// <summary>
+        /// Unity's particle clock does not reliably follow KSP's on-rails time warp. Advance only
+        /// the difference between KSP universal time and the amount Unity already simulated this
+        /// frame. This makes lifetime, size-over-lifetime, colour fade, noise and velocity motion
+        /// all evolve at the same rate as the game clock.
+        /// </summary>
+        public void AdvanceUniversalTime(float gameDeltaTime, float unityDeltaTime)
+        {
+            if (_system == null || gameDeltaTime <= 0f)
+                return;
+
+            float extra = gameDeltaTime - Mathf.Max(0f, unityDeltaTime);
+            if (extra <= 0.0005f)
+                return;
+
+            float largestLifetimeMultiplier = Mathf.Max(
+                _settings.SmallEngineLifetimeMultiplier,
+                _settings.LargeEngineLifetimeMultiplier);
+            float maximumPossibleLifetime = _settings.Lifetime
+                * Mathf.Max(1f, largestLifetimeMultiplier)
+                * 1.15f;
+
+            // A very large rails-warp jump means every existing particle is older than its maximum
+            // possible lifetime. Clearing is both exact for our purposes and avoids hundreds of
+            // expensive simulation substeps.
+            if (extra >= maximumPossibleLifetime)
+            {
+                _system.Clear(true);
+                return;
+            }
+
+            float stepLimit = Mathf.Max(0.25f, _settings.MaxWarpSimulationStep);
+            float remaining = extra;
+            int guard = 0;
+            while (remaining > 0.0005f && guard < 1024)
+            {
+                float step = Mathf.Min(stepLimit, remaining);
+                _system.Simulate(step, true, false, false);
+                remaining -= step;
+                guard++;
+            }
+        }
+
+        public void UpdateDynamicMotion(
+            CelestialBody body,
+            WindModel windModel,
+            double universalTime,
+            float dt,
+            bool hasSurfaceReference,
+            float surfaceReferenceAltitude)
         {
             if (_system == null || body == null || dt <= 0f)
                 return;
@@ -164,8 +221,6 @@ namespace PersistentSRBSmoke
                 float angle = baseAngle + wobble;
                 Vector3 divergenceDirection = tangentA * Mathf.Cos(angle) + tangentB * Mathf.Sin(angle);
 
-                // Short-lived smoke generally came from a smaller motor. Scale diffusion down a
-                // little so a separation motor does not grow into the same broad cloud as a main SRB.
                 float sourceScale = Mathf.Clamp(
                     particle.startLifetime / Mathf.Max(0.01f, _settings.Lifetime),
                     0.30f,
@@ -173,13 +228,33 @@ namespace PersistentSRBSmoke
                 float diffusion = _settings.DiffusionSpeed
                     * Mathf.Lerp(0.62f, 1f, sourceScale)
                     * (0.55f + _settings.DiffusionGrowth * Mathf.SmoothStep(0f, 1f, age));
-                Vector3 desiredVelocity = wind + divergenceDirection * diffusion + up * _settings.Buoyancy;
+
+                float heightAboveSurface = hasSurfaceReference
+                    ? Mathf.Max(0f, altitude - surfaceReferenceAltitude)
+                    : -1f;
+                float groundBlend = GetGroundBlend(heightAboveSurface);
+                float windScale = Mathf.Lerp(_settings.NearGroundWindMultiplier, 1f, groundBlend);
+                float diffusionScale = Mathf.Lerp(_settings.NearGroundDiffusionMultiplier, 1f, groundBlend);
+                float buoyancyScale = Mathf.Lerp(_settings.NearGroundBuoyancyMultiplier, 1f, groundBlend);
+
+                Vector3 desiredVelocity = wind * windScale
+                    + divergenceDirection * (diffusion * diffusionScale)
+                    + up * (_settings.Buoyancy * buoyancyScale);
 
                 particle.velocity = Vector3.Lerp(particle.velocity, desiredVelocity, response);
                 _particleBuffer[i] = particle;
             }
 
             _system.SetParticles(_particleBuffer, count);
+        }
+
+        private float GetGroundBlend(float heightAboveGround)
+        {
+            if (heightAboveGround < 0f || _settings.NearGroundHoldHeight <= 0.001f)
+                return 1f;
+
+            float t = Mathf.Clamp01(heightAboveGround / _settings.NearGroundHoldHeight);
+            return Mathf.SmoothStep(0f, 1f, t);
         }
 
         private void ConfigureParticleSystem(ParticleSystem system)
