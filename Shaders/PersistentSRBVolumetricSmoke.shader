@@ -15,8 +15,8 @@ Shader "PersistentSRBSmoke/VolumetricSmoke"
         _SoftDepthFactor ("Soft Depth", Float) = 1.65
         _RaySteps ("Ray Steps", Float) = 24
         _ShadowSteps ("Shadow Steps", Float) = 4
-        _DensityMultiplier ("Density", Float) = 1.15
-        _Extinction ("Extinction", Float) = 2.1
+        _DensityMultiplier ("Density", Float) = 1.48
+        _Extinction ("Extinction", Float) = 2.35
     }
 
     SubShader
@@ -134,16 +134,55 @@ Shader "PersistentSRBSmoke/VolumetricSmoke"
                 return value;
             }
 
+            float softSphere(float3 p, float3 centre, float radius, float3 stretch)
+            {
+                float3 q = (p - centre) / max(stretch, float3(0.05,0.05,0.05));
+                float x = saturate(1.0 - length(q) / max(0.04, radius));
+                return x * x * (3.0 - 2.0 * x);
+            }
+
+            // Large-scale geometry of one smoke cloudlet. Real SRB exhaust forms rolling billows
+            // with several attached lobes; a single sphere always reads like a chain of beads.
+            float macroShape(float3 p, float seed)
+            {
+                float a = seed * 6.2831853;
+                float3 d1 = normalize(float3(sin(a + 0.7), cos(a * 1.31 + 1.2), sin(a * 1.77 + 2.1)) + 0.001);
+                float3 d2 = normalize(float3(cos(a * 1.13 + 2.8), sin(a * 1.59 + 0.4), cos(a * 0.83 + 1.7)) + 0.001);
+                float3 d3 = normalize(cross(d1, d2) + float3(0.05, 0.02, 0.03));
+
+                float shape = softSphere(p, float3(0,0,0), 0.49, float3(1.06, 0.98, 1.02));
+                shape = max(shape, softSphere(p,  d1 * 0.17, 0.38, float3(1.04, 0.91, 1.10)) * 0.98);
+                shape = max(shape, softSphere(p, -d1 * 0.15, 0.35, float3(0.93, 1.10, 1.00)) * 0.96);
+                shape = max(shape, softSphere(p,  d2 * 0.20, 0.32, float3(1.12, 0.94, 0.92)) * 0.94);
+                shape = max(shape, softSphere(p, -d2 * 0.18, 0.30, float3(0.94, 1.06, 1.10)) * 0.92);
+                shape = max(shape, softSphere(p,  d3 * 0.21, 0.28, float3(1.06, 1.03, 0.91)) * 0.90);
+                return saturate(shape);
+            }
+
             float densityAt(float3 p, float age, float seed)
             {
-                float radial = saturate(1.0 - length(p * 1.72));
-                radial = radial * radial * (3.0 - 2.0 * radial);
+                float macro = macroShape(p, seed);
+                if (macro <= 0.001)
+                    return 0;
 
-                float3 warp = float3(seed * 19.7, seed * 7.3, seed * 13.1);
-                float n = fbm(p * 3.35 + warp + age * float3(0.08, 0.16, 0.05));
-                float detail = noise3(p * 11.0 + warp * 0.37 + age * 0.31);
-                float eroded = smoothstep(0.25, 0.78, n + radial * 0.62 - detail * 0.17);
-                return saturate(radial * eroded * _DensityMultiplier);
+                float3 warpSeed = float3(seed * 19.7, seed * 7.3, seed * 13.1);
+
+                // Low-frequency domain warp bends the density boundary, while higher-frequency
+                // erosion cuts cauliflower detail into the illuminated outer surface.
+                float3 warp = float3(
+                    noise3(p * 2.1 + warpSeed + 3.1),
+                    noise3(p * 2.0 + warpSeed + 9.4),
+                    noise3(p * 2.2 + warpSeed + 15.7)) - 0.5;
+                float3 q = p + warp * 0.085;
+
+                float n = fbm(q * 3.05 + warpSeed + age * float3(0.07, 0.14, 0.05));
+                float detail = noise3(q * 10.2 + warpSeed * 0.37 + age * 0.27);
+                float ridge = 1.0 - abs(detail * 2.0 - 1.0);
+                ridge *= ridge;
+
+                float eroded = smoothstep(0.18, 0.78, n + macro * 0.72 + ridge * 0.12 - detail * 0.19);
+                float core = lerp(0.78, 1.12, macro);
+                return saturate(macro * eroded * core * _DensityMultiplier);
             }
 
             float hg(float cosTheta, float g)
@@ -178,7 +217,7 @@ Shader "PersistentSRBSmoke/VolumetricSmoke"
                     optical += densityAt(samplePos, age, seed) * stepLength;
                     samplePos += sunDirLocal * stepLength;
                 }
-                return exp(-optical * _Extinction * 1.35);
+                return exp(-optical * _Extinction * 1.25);
             }
 
             fixed4 frag(v2f i) : SV_Target
@@ -215,26 +254,25 @@ Shader "PersistentSRBSmoke/VolumetricSmoke"
                 [loop]
                 for (int s = 0; s < MAX_RAY_STEPS; s++)
                 {
-                    if (s >= steps || transmittance < 0.015) break;
+                    if (s >= steps || transmittance < 0.012) break;
 
                     float density = densityAt(p, age, seed);
-                    if (density > 0.008)
+                    if (density > 0.006)
                     {
                         float shadow = shadowTransmittance(p, sunDirLocal, age, seed);
                         float sun = _SunIntensity * _SunTransmittance * phase * shadow;
 
                         float upTerm = saturate(dot(normalize(p + 0.0001), normalize(_PlanetUp.xyz)) * 0.5 + 0.5);
-                        float3 ambient = _SkyAmbientColor.rgb * _AmbientIntensity * (0.68 + 0.32 * upTerm);
-                        ambient += _GroundBounceColor.rgb * _AmbientIntensity * (0.08 + 0.14 * (1.0 - upTerm));
+                        float3 ambient = _SkyAmbientColor.rgb * _AmbientIntensity * (0.74 + 0.26 * upTerm);
+                        ambient += _GroundBounceColor.rgb * _AmbientIntensity * (0.10 + 0.16 * (1.0 - upTerm));
 
                         float powder = 1.0 - exp(-density * _BeerPowder * 4.0);
-                        float multiple = powder * _MultipleScattering * (0.24 + 0.18 * saturate(phase * 0.16));
+                        float multiple = powder * _MultipleScattering * (0.30 + 0.20 * saturate(phase * 0.16));
                         float3 lighting = ambient + _SunColor.rgb * sun + multiple;
 
-                        // SRB smoke is a high-albedo particulate cloud. Preserve the engine-specific
-                        // tint but keep the bulk albedo light enough that interiors become grey/tan,
-                        // never coal-black merely because direct sunlight is weak.
-                        float3 albedo = lerp(smokeColor.rgb, float3(0.82, 0.80, 0.76), 0.44);
+                        // Preserve a light grey / warm particulate albedo. Internal density creates
+                        // relief through shadowing, while multiple scattering prevents black cores.
+                        float3 albedo = lerp(smokeColor.rgb, float3(0.86, 0.83, 0.78), 0.48);
                         float sampleAlpha = 1.0 - exp(-density * _Extinction * stepLength);
                         sampleAlpha *= smokeColor.a;
 
