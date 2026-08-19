@@ -1,0 +1,9 @@
+.vs/
+bin/
+obj/
+*.user
+*.suo
+GameData/PersistentSRBSmoke/Plugins/*.dll
+GameData/PersistentSRBSmoke/Plugins/*.pdb
+
+dist/
