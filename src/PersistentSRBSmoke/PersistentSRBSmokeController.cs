@@ -21,6 +21,8 @@ namespace PersistentSRBSmoke
         private WindModel _wind;
         private readonly Dictionary<int, EngineEmitter> _emitters = new Dictionary<int, EngineEmitter>();
         private float _nextEngineScan;
+        private float _nextDynamicMotion;
+        private float _lastDynamicMotion;
         private float _nextDebugLog;
 
         private void Start()
@@ -38,7 +40,8 @@ namespace PersistentSRBSmoke
                 _smoke = new SmokeParticlePool(_settings);
                 _wind = new WindModel(_settings);
                 ScanEngines();
-                Debug.Log("[PersistentSRBSmoke] v0.2 initialized with altitude wind shear.");
+                _lastDynamicMotion = Time.realtimeSinceStartup;
+                Debug.Log("[PersistentSRBSmoke] v0.3 initialized with expanding, dynamically advected smoke.");
             }
             catch (Exception ex)
             {
@@ -52,20 +55,43 @@ namespace PersistentSRBSmoke
             if (_smoke == null || !HighLogic.LoadedSceneIsFlight)
                 return;
 
-            if (Time.realtimeSinceStartup >= _nextEngineScan)
+            float now = Time.realtimeSinceStartup;
+
+            if (now >= _nextEngineScan)
             {
                 ScanEngines();
-                _nextEngineScan = Time.realtimeSinceStartup + 1.0f;
+                _nextEngineScan = now + 1.0f;
             }
 
             float dt = Mathf.Max(0.001f, Time.fixedDeltaTime);
             foreach (EngineEmitter emitter in _emitters.Values)
                 UpdateEmitter(emitter, dt);
 
-            if (_settings.DebugLogging && Time.realtimeSinceStartup >= _nextDebugLog)
+            // The old implementation only assigned wind when a particle was born. Updating the
+            // living cloud at a lower, configurable rate lets old parts of the trail keep drifting,
+            // shearing and spreading without doing tens of thousands of particle updates every frame.
+            float dynamicInterval = 1f / Mathf.Max(1f, _settings.DynamicMotionHz);
+            if (now >= _nextDynamicMotion)
+            {
+                Vessel activeVessel = FlightGlobals.ActiveVessel;
+                if (activeVessel != null && activeVessel.mainBody != null)
+                {
+                    float dynamicDt = Mathf.Clamp(now - _lastDynamicMotion, 0.001f, 0.5f);
+                    _smoke.UpdateDynamicMotion(
+                        activeVessel.mainBody,
+                        _wind,
+                        Planetarium.GetUniversalTime(),
+                        dynamicDt);
+                }
+
+                _lastDynamicMotion = now;
+                _nextDynamicMotion = now + dynamicInterval;
+            }
+
+            if (_settings.DebugLogging && now >= _nextDebugLog)
             {
                 Debug.Log("[PersistentSRBSmoke] SRB emitters=" + _emitters.Count + " particles=" + _smoke.ParticleCount);
-                _nextDebugLog = Time.realtimeSinceStartup + 5f;
+                _nextDebugLog = now + 5f;
             }
         }
 
@@ -105,15 +131,18 @@ namespace PersistentSRBSmoke
 
             float thrustFactor = GetThrustFactor(engine);
 
-            // Keep the original continuous emission model for low-speed and stationary cases.
+            // SRB exhaust is its own mass of hot gas and solids. In thin atmosphere we reduce the
+            // density somewhat, but never as aggressively as the old pressure-proportional model.
             float desired = (_settings.BaseEmissionRate * dt + travel * _settings.ParticlesPerMeter) * thrustFactor * atmosphere;
             emitter.EmissionAccumulator += desired;
             int accumulatedCount = Mathf.FloorToInt(emitter.EmissionAccumulator);
 
-            // At high speed the old particles-per-meter accumulator could leave visible holes.
-            // Enforce a maximum longitudinal distance between emitted particles. We relax it
-            // slightly in thin atmosphere because the smoke is already much more transparent.
-            float effectiveSpacing = _settings.MaxParticleSpacing * Mathf.Lerp(1.6f, 1.0f, atmosphere);
+            // Guarantee longitudinal overlap. High-altitude spacing is allowed to relax only a
+            // little; it no longer grows by ~60%, which was still visible as gaps at high speed.
+            float effectiveSpacing = _settings.MaxParticleSpacing * Mathf.Lerp(
+                _settings.HighAltitudeSpacingMultiplier,
+                1.0f,
+                atmosphere);
             int spacingCount = travel > 0.001f
                 ? Mathf.CeilToInt(travel / Mathf.Max(0.25f, effectiveSpacing))
                 : 0;
@@ -122,8 +151,6 @@ namespace PersistentSRBSmoke
             if (count <= 0)
                 return;
 
-            // Consume only particles that came from the accumulator. Spacing-driven particles
-            // are additional samples whose only purpose is to keep the trail visually continuous.
             emitter.EmissionAccumulator -= Mathf.Min(accumulatedCount, count);
 
             Vector3 up = vessel.upAxis;
@@ -146,18 +173,18 @@ namespace PersistentSRBSmoke
 
             double universalTime = Planetarium.GetUniversalTime();
             Vector3 wind = _wind == null ? Vector3.zero : _wind.GetWind(vessel, up, universalTime);
-            float scale = Mathf.Lerp(0.72f, 1.25f, Mathf.Sqrt(thrustFactor));
+            float scale = Mathf.Lerp(0.78f, 1.30f, Mathf.Sqrt(thrustFactor));
 
             for (int i = 0; i < count; i++)
             {
-                // Stratified placement prevents particle bunching while still avoiding a perfectly regular pattern.
-                float slotJitter = UnityEngine.Random.Range(-0.18f, 0.18f);
+                // Stratified placement keeps the trail continuous even when a physics frame covers
+                // a large distance. A small jitter avoids a visibly mathematical bead pattern.
+                float slotJitter = UnityEngine.Random.Range(-0.12f, 0.12f);
                 float t = count == 1 ? 1f : ((i + 0.5f + slotJitter) / count);
                 Vector3 point = Vector3.Lerp(previousPosition, currentPosition, Mathf.Clamp01(t));
 
-                // Jitter only across the trail. The previous 3D jitter also moved particles along
-                // the flight path and could re-open gaps that the interpolation had just filled.
-                float radialJitter = _settings.StartSize * scale * 0.10f;
+                // Jitter only across the trail, never along it.
+                float radialJitter = _settings.StartSize * scale * 0.12f;
                 float angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
                 float radius = Mathf.Sqrt(UnityEngine.Random.value) * radialJitter;
                 point += tangentA * (Mathf.Cos(angle) * radius) + tangentB * (Mathf.Sin(angle) * radius);
@@ -265,17 +292,26 @@ namespace PersistentSRBSmoke
             return Mathf.Clamp01(engine.finalThrust / engine.maxThrust);
         }
 
-        private static float GetAtmosphereFactor(Vessel vessel)
+        private float GetAtmosphereFactor(Vessel vessel)
         {
             if (vessel == null || vessel.mainBody == null || !vessel.mainBody.atmosphere)
                 return 0f;
 
-            if (vessel.altitude >= vessel.mainBody.atmosphereDepth)
+            float atmosphereDepth = Mathf.Max(1f, (float)vessel.mainBody.atmosphereDepth);
+            float altitude = Mathf.Max(0f, (float)vessel.altitude);
+            if (altitude >= atmosphereDepth)
                 return 0f;
 
+            float altitudeRatio = Mathf.Clamp01(altitude / atmosphereDepth);
+            float edgeT = Mathf.Clamp01((altitudeRatio - 0.88f) / 0.12f);
+            float edgeFade = 1f - Mathf.SmoothStep(0f, 1f, edgeT);
+
             double pressureKpa = vessel.staticPressurekPa;
-            float normalized = Mathf.Clamp01((float)(pressureKpa / 101.325));
-            return Mathf.Lerp(0.08f, 1f, Mathf.Sqrt(normalized));
+            float normalizedPressure = Mathf.Clamp01((float)(pressureKpa / 101.325));
+            float pressureResponse = Mathf.Pow(normalizedPressure, 0.20f);
+            float density = Mathf.Lerp(_settings.ThinAtmosphereDensityFloor, 1f, pressureResponse);
+
+            return Mathf.Clamp01(density * edgeFade);
         }
 
         private void OnDestroy()
