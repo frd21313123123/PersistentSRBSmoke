@@ -57,7 +57,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.create_release == true)
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: windows-latest
     permissions:
@@ -80,23 +80,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $version = "${{ github.ref_name }}"
-          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-              if ("${{ inputs.tag_name }}" -ne "") {
-                  $version = "${{ inputs.tag_name }}"
-              } else {
-                  $versionData = Get-Content "GameData/PersistentSRBSmoke/PersistentSRBSmoke.version" -Raw | ConvertFrom-Json
-                  $version = "v$($versionData.VERSION.MAJOR).$($versionData.VERSION.MINOR).$($versionData.VERSION.PATCH)"
-              }
+          $version = ""
+          if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "") {
+              $version = "${{ github.ref_name }}"
+          } elseif ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.tag_name }}" -ne "") {
+              $version = "${{ inputs.tag_name }}"
+          } else {
+              $versionData = Get-Content "GameData/PersistentSRBSmoke/PersistentSRBSmoke.version" -Raw | ConvertFrom-Json
+              $version = "v$($versionData.VERSION.MAJOR).$($versionData.VERSION.MINOR).$($versionData.VERSION.PATCH)"
           }
-          Write-Host "Packaging release for version $version..."
+
+          Write-Host "Publishing release version: $version"
           ./scripts/package.ps1 -Version $version
 
           $existing = gh release view $version 2>$null
           if ($LASTEXITCODE -eq 0) {
               Write-Host "Updating existing release $version..."
               gh release upload $version dist/*.zip --clobber
+              gh release edit $version --latest
           } else {
               Write-Host "Creating new release $version..."
-              gh release create $version dist/*.zip --generate-notes --title "Persistent SRB Smoke $version"
+              gh release create $version dist/*.zip --target ${{ github.sha }} --generate-notes --title "Persistent SRB Smoke $version" --latest
           }

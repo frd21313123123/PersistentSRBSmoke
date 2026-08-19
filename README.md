@@ -1,4 +1,4 @@
-# Persistent SRB Smoke — MVP 0.1
+# Persistent SRB Smoke
 
 [![Build](https://github.com/frd21313123123/PersistentSRBSmoke/actions/workflows/build.yml/badge.svg)](https://github.com/frd21313123123/PersistentSRBSmoke/actions/workflows/build.yml)
 
