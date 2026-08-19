@@ -40,7 +40,6 @@
     <Reference Include="System.Core" />
   </ItemGroup>
 
-  <!-- Local developer build: use the real KSP 1.12.x managed assemblies. -->
   <ItemGroup Condition=" '$(UseKspSkeletons)' != 'true' ">
     <Reference Include="Assembly-CSharp">
       <HintPath>$(KSPManagedDir)\Assembly-CSharp.dll</HintPath>
@@ -60,7 +59,6 @@
     </Reference>
   </ItemGroup>
 
-  <!-- GitHub Actions / clean CI build: public compile-time-only KSP skeleton assemblies. -->
   <ItemGroup Condition=" '$(UseKspSkeletons)' == 'true' ">
     <PackageReference Include="Defiant_Zombie.KSP.Skeleton.Assembly-CSharp" Version="1.11.2" />
     <PackageReference Include="Defiant_Zombie.KSP.Skeleton.UnityEngine.CoreModule" Version="1.11.2" />
@@ -71,6 +69,7 @@
     <Compile Include="PersistentSRBSmoke\PersistentSRBSmokeController.cs" />
     <Compile Include="PersistentSRBSmoke\Settings.cs" />
     <Compile Include="PersistentSRBSmoke\SmokeParticlePool.cs" />
+    <Compile Include="PersistentSRBSmoke\WindModel.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
 
