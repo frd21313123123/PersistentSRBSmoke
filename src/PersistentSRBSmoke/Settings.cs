@@ -38,6 +38,16 @@ namespace PersistentSRBSmoke
         public float SmokeBrightness = 0.78f;
         public float EngineColorVariation = 0.08f;
 
+        // Volumetric-inspired optical model.
+        public bool VolumetricLightingEnabled = true;
+        public float VolumetricScatteringForward = 0.85f;
+        public float VolumetricScatteringBackward = -0.35f;
+        public float VolumetricMultipleScattering = 0.55f;
+        public float VolumetricSoftDepthFactor = 1.65f;
+        public float VolumetricSunIntensity = 1.10f;
+        public float VolumetricAmbientIntensity = 0.46f;
+        public float VolumetricBeerPowderFactor = 0.72f;
+
         // Engine-dependent smoke scaling. KSP engine thrust is measured in kN.
         public bool EngineScalingEnabled = true;
         public float EngineMinThrust = 8f;
@@ -128,6 +138,15 @@ namespace PersistentSRBSmoke
                 settings.Opacity = ReadFloat(node, "opacity", settings.Opacity, 0.01f, 1f);
                 settings.SmokeBrightness = ReadFloat(node, "smokeBrightness", settings.SmokeBrightness, 0.2f, 1.4f);
                 settings.EngineColorVariation = ReadFloat(node, "engineColorVariation", settings.EngineColorVariation, 0f, 0.3f);
+
+                settings.VolumetricLightingEnabled = ReadBool(node, "volumetricLightingEnabled", settings.VolumetricLightingEnabled);
+                settings.VolumetricScatteringForward = ReadFloat(node, "volumetricScatteringForward", settings.VolumetricScatteringForward, -0.95f, 0.95f);
+                settings.VolumetricScatteringBackward = ReadFloat(node, "volumetricScatteringBackward", settings.VolumetricScatteringBackward, -0.95f, 0.95f);
+                settings.VolumetricMultipleScattering = ReadFloat(node, "volumetricMultipleScattering", settings.VolumetricMultipleScattering, 0f, 2f);
+                settings.VolumetricSoftDepthFactor = ReadFloat(node, "volumetricSoftDepthFactor", settings.VolumetricSoftDepthFactor, 0.05f, 30f);
+                settings.VolumetricSunIntensity = ReadFloat(node, "volumetricSunIntensity", settings.VolumetricSunIntensity, 0f, 5f);
+                settings.VolumetricAmbientIntensity = ReadFloat(node, "volumetricAmbientIntensity", settings.VolumetricAmbientIntensity, 0f, 3f);
+                settings.VolumetricBeerPowderFactor = ReadFloat(node, "volumetricBeerPowderFactor", settings.VolumetricBeerPowderFactor, 0.01f, 3f);
 
                 settings.EngineScalingEnabled = ReadBool(node, "engineScalingEnabled", settings.EngineScalingEnabled);
                 settings.EngineMinThrust = ReadFloat(node, "engineMinThrust", settings.EngineMinThrust, 0.1f, 5000f);
