@@ -10,7 +10,8 @@ namespace PersistentSRBSmoke
     ///
     /// Transparent Shuriken particles do not produce a useful soft world shadow in KSP, so this
     /// layer samples the existing persistent smoke, projects a subset of cloudlets along sunlight
-    /// onto the active body's terrain surface and builds a low-frequency soft shadow mesh.
+    /// onto the active body's terrain surface and builds a soft shadow mesh synchronized with the
+    /// visible particle trail.
     /// </summary>
     [KSPAddon(KSPAddon.Startup.Flight, false)]
     public sealed class SmokeShadowLayer : MonoBehaviour
@@ -18,7 +19,9 @@ namespace PersistentSRBSmoke
         private sealed class ShadowSettings
         {
             public bool Enabled = true;
-            public float UpdateHz = 3.0f;
+            // 0 = rebuild once per rendered frame. Positive values are an optional FPS cap for
+            // users who prefer cheaper shadows on slow hardware.
+            public float UpdateHz = 0f;
             public int MaxQuads = 1800;
             public int SampleStride = 8;
             public float MaxAltitude = 14000f;
@@ -46,7 +49,7 @@ namespace PersistentSRBSmoke
 
                     settings.Enabled = ReadBool(node, "enabled", true)
                         && ReadBool(node, "smokeShadowEnabled", settings.Enabled);
-                    settings.UpdateHz = ReadFloat(node, "smokeShadowUpdateHz", settings.UpdateHz, 0.5f, 20f);
+                    settings.UpdateHz = ReadFloat(node, "smokeShadowUpdateHz", settings.UpdateHz, 0f, 240f);
                     settings.MaxQuads = ReadInt(node, "smokeShadowMaxQuads", settings.MaxQuads, 64, 10000);
                     settings.SampleStride = ReadInt(node, "smokeShadowSampleStride", settings.SampleStride, 1, 64);
                     settings.MaxAltitude = ReadFloat(node, "smokeShadowMaxAltitude", settings.MaxAltitude, 100f, 100000f);
@@ -151,10 +154,18 @@ namespace PersistentSRBSmoke
                 _nextSourceSearch = now + 1.0f;
             }
 
-            if (_sourceSystem == null || now < _nextUpdate)
+            if (_sourceSystem == null)
                 return;
 
-            _nextUpdate = now + 1f / Mathf.Max(0.5f, _settings.UpdateHz);
+            // Frame-synchronised is the default. A positive smokeShadowUpdateHz remains available
+            // as an explicit performance cap, but zero follows the visible Shuriken trail every
+            // rendered frame and therefore cannot visibly jump between 3 Hz mesh rebuilds.
+            if (_settings.UpdateHz > 0.001f)
+            {
+                if (now < _nextUpdate)
+                    return;
+                _nextUpdate = now + 1f / Mathf.Max(1f, _settings.UpdateHz);
+            }
 
             Vessel vessel = FlightGlobals.ActiveVessel;
             CelestialBody body = vessel == null ? null : vessel.mainBody;
@@ -520,7 +531,11 @@ namespace PersistentSRBSmoke
             Material material = new Material(shader);
             material.name = "PersistentSRBSmoke.ProjectedShadowMaterial";
             material.mainTexture = texture;
-            material.renderQueue = 3001;
+
+            // Terrain/opaque geometry is already drawn, while the smoke particle materials normally
+            // live at Transparent (3000). Rendering the projected shadow just before them prevents
+            // the dark mesh from being composited on top of the smoke itself.
+            material.renderQueue = 2990;
             if (material.HasProperty("_TintColor"))
                 material.SetColor("_TintColor", Color.white);
             return material;
