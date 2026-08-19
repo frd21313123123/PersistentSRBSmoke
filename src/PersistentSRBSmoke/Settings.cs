@@ -30,9 +30,9 @@ namespace PersistentSRBSmoke
         public float DynamicFarDistance = 5000f;
         public int DynamicFarStrideMultiplier = 2;
 
-        // Number of altitude samples used by WindModel. Perlin noise is evaluated once per layer
-        // per dynamic tick instead of several times for every smoke particle.
-        public int WindCacheLayers = 96;
+        // Number of altitude samples used by the large-scale wind profile. Samples are interpolated
+        // smoothly; the local spreading field is analytic and does not require extra Perlin calls.
+        public int WindCacheLayers = 128;
 
         // KSP time warp / universal-time synchronization
         public bool FollowUniversalTime = true;
@@ -54,7 +54,7 @@ namespace PersistentSRBSmoke
         public float SizeGrowth = 18.0f;
         public float HighAltitudeSizeMultiplier = 1.85f;
         public float Opacity = 0.80f;
-        public float SmokeBrightness = 0.96f;
+        public float SmokeBrightness = 0.88f;
         public float EngineColorVariation = 0.05f;
 
         // Engine-dependent smoke scaling. KSP engine thrust is measured in kN.
@@ -72,12 +72,13 @@ namespace PersistentSRBSmoke
         public float SmallEngineSpacingMultiplier = 2.40f;
         public float LargeEngineSpacingMultiplier = 0.95f;
 
-        // Local cloud motion / diffusion
+        // Local cloud motion / diffusion. This remains independent of the prevailing wind so smoke
+        // continues to widen at every altitude instead of behaving like a rigid ribbon.
         public float DriftSpeed = 1.8f;
-        public float DiffusionSpeed = 3.2f;
-        public float DiffusionGrowth = 1.55f;
+        public float DiffusionSpeed = 4.0f;
+        public float DiffusionGrowth = 1.75f;
         public float Buoyancy = 0.24f;
-        public float DynamicWindResponse = 2.4f;
+        public float DynamicWindResponse = 2.1f;
         public float TurbulenceStrength = 1.1f;
         public float TurbulenceFrequency = 0.055f;
 
@@ -98,13 +99,19 @@ namespace PersistentSRBSmoke
         public float PadCloudUpdraftSpeed = 5.5f;
         public float PadCloudGlobalBias = 0.72f;
 
-        // Altitude-dependent wind shear
+        // Continuous altitude-dependent wind. WindLayerHeight is now a broad vertical variation
+        // scale, not a hard layer boundary. WindSpread* controls the small horizontal eddies that
+        // make neighbouring cloudlets separate across the full ascent profile.
         public bool WindEnabled = true;
-        public float WindSpeed = 7.0f;
-        public float WindLayerHeight = 1800f;
+        public float WindSpeed = 4.8f;
+        public float WindLayerHeight = 6500f;
         public float WindTopAltitude = 32000f;
-        public float WindDirectionChangeRadians = 1.15f;
-        public float WindTimeScale = 0.0006f;
+        public float WindDirectionChangeRadians = 0.55f;
+        public float WindTimeScale = 0.00035f;
+        public float WindSpreadSpeed = 2.4f;
+        public float WindSpreadScale = 260f;
+        public float WindSpreadVerticalScale = 1100f;
+        public float WindSpreadTimeScale = 0.0020f;
 
         public bool DebugLogging = false;
 
@@ -200,6 +207,10 @@ namespace PersistentSRBSmoke
                 settings.WindTopAltitude = ReadFloat(node, "windTopAltitude", settings.WindTopAltitude, 1000f, 100000f);
                 settings.WindDirectionChangeRadians = ReadFloat(node, "windDirectionChangeRadians", settings.WindDirectionChangeRadians, 0f, 6.283185f);
                 settings.WindTimeScale = ReadFloat(node, "windTimeScale", settings.WindTimeScale, 0f, 0.05f);
+                settings.WindSpreadSpeed = ReadFloat(node, "windSpreadSpeed", settings.WindSpreadSpeed, 0f, 20f);
+                settings.WindSpreadScale = ReadFloat(node, "windSpreadScale", settings.WindSpreadScale, 30f, 5000f);
+                settings.WindSpreadVerticalScale = ReadFloat(node, "windSpreadVerticalScale", settings.WindSpreadVerticalScale, 80f, 20000f);
+                settings.WindSpreadTimeScale = ReadFloat(node, "windSpreadTimeScale", settings.WindSpreadTimeScale, 0f, 0.1f);
 
                 settings.DebugLogging = ReadBool(node, "debugLogging", settings.DebugLogging);
             }
