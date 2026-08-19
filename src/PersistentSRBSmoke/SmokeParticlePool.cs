@@ -13,6 +13,7 @@ namespace PersistentSRBSmoke
         private readonly Material _material;
         private readonly Texture2D _texture;
         private readonly Mesh _cloudletMesh;
+        private readonly PadCloudDensityField _padCloud;
         private bool _floatingOriginRegistered;
 
         public int ParticleCount { get { return _system == null ? 0 : _system.particleCount; } }
@@ -21,6 +22,7 @@ namespace PersistentSRBSmoke
         {
             _settings = settings;
             _particleBuffer = new ParticleSystem.Particle[Mathf.Max(1, settings.MaxParticles)];
+            _padCloud = new PadCloudDensityField(settings);
 
             _gameObject = new GameObject("PersistentSRBSmoke.ParticlePool");
             UnityEngine.Object.DontDestroyOnLoad(_gameObject);
@@ -76,9 +78,9 @@ namespace PersistentSRBSmoke
                 * smallEngineScatter;
             Vector3 sideways = (tangentA * Mathf.Cos(angle) + tangentB * Mathf.Sin(angle)) * drift;
 
-            // Around the launch pad the visible SRB cloud is massive and inertial. Keep wind and
-            // lateral diffusion weak for the first ~50-60 m AGL, then smoothly blend into the
-            // normal free-atmosphere motion model.
+            // Around the launch pad the whole cloud should not simply translate with the wind.
+            // Ordinary wind/diffusion remain weak here; PadCloudDensityField supplies a separate
+            // density-driven pressure flow once enough exhaust has accumulated in the same volume.
             float groundBlend = GetGroundBlend(heightAboveGround);
             float windScale = Mathf.Lerp(_settings.NearGroundWindMultiplier, 1f, groundBlend);
             float diffusionScale = Mathf.Lerp(_settings.NearGroundDiffusionMultiplier, 1f, groundBlend);
@@ -188,6 +190,16 @@ namespace PersistentSRBSmoke
             float bodyRadius = (float)body.Radius;
             float response = 1f - Mathf.Exp(-Mathf.Max(0f, _settings.DynamicWindResponse) * dt);
 
+            // Build one coarse density field per dynamic update. Only cloudlets near the captured
+            // launch surface enter the grid, so the long upper-atmosphere trail is unaffected.
+            _padCloud.Rebuild(
+                _particleBuffer,
+                count,
+                bodyCenter,
+                bodyRadius,
+                hasSurfaceReference,
+                surfaceReferenceAltitude);
+
             for (int i = 0; i < count; i++)
             {
                 ParticleSystem.Particle particle = _particleBuffer[i];
@@ -237,9 +249,17 @@ namespace PersistentSRBSmoke
                 float diffusionScale = Mathf.Lerp(_settings.NearGroundDiffusionMultiplier, 1f, groundBlend);
                 float buoyancyScale = Mathf.Lerp(_settings.NearGroundBuoyancyMultiplier, 1f, groundBlend);
 
+                Vector3 padFlow = _padCloud.GetFlow(
+                    particle,
+                    up,
+                    heightAboveSurface,
+                    sourceScale,
+                    age);
+
                 Vector3 desiredVelocity = wind * windScale
                     + divergenceDirection * (diffusion * diffusionScale)
-                    + up * (_settings.Buoyancy * buoyancyScale);
+                    + up * (_settings.Buoyancy * buoyancyScale)
+                    + padFlow;
 
                 particle.velocity = Vector3.Lerp(particle.velocity, desiredVelocity, response);
                 _particleBuffer[i] = particle;
