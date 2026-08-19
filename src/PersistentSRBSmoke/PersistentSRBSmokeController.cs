@@ -49,8 +49,10 @@ namespace PersistentSRBSmoke
             emission *= emitterShare;
             spacing *= Mathf.Sqrt(1f / emitterShare);
 
-            Color smallColor = new Color(0.36f, 0.33f, 0.30f, 1f);
-            Color largeColor = new Color(0.56f, 0.55f, 0.53f, 1f);
+            // Small separation motors stay darker/warmer. Large SRBs use a high-albedo neutral grey
+            // so volumetric lighting can create real shadow/highlight structure without a black plume.
+            Color smallColor = new Color(0.44f, 0.41f, 0.38f, 1f);
+            Color largeColor = new Color(0.69f, 0.67f, 0.63f, 1f);
             Color baseColor = Color.Lerp(smallColor, largeColor, curve);
 
             string engineName = engine != null && engine.part != null ? engine.part.name : string.Empty;
@@ -153,9 +155,8 @@ namespace PersistentSRBSmoke
                 _pendingDynamicGameTime = 0.0;
 
                 Debug.Log(
-                    "[PersistentSRBSmoke] v0.4.0 initialized. VolumetricLighting=" +
-                    _settings.VolumetricLightingEnabled +
-                    " customShader=" + _smoke.UsingCustomVolumetricShader +
+                    "[PersistentSRBSmoke] v0.4.1 initialized. raymarch=" +
+                    _smoke.UsingCustomVolumetricShader +
                     " softParticles=" + _smoke.SoftParticlesActive);
             }
             catch (Exception ex)
@@ -244,7 +245,7 @@ namespace PersistentSRBSmoke
                     " particles=" + _smoke.ParticleCount +
                     " UTdt=" + gameDt.ToString("F2") +
                     " effectiveWarp=" + warpRatio.ToString("F1") + "x" +
-                    " volumetric=" + _settings.VolumetricLightingEnabled +
+                    " raymarch=" + _smoke.UsingCustomVolumetricShader +
                     " soft=" + _smoke.SoftParticlesActive);
                 _nextDebugLog = now + 5f;
             }
@@ -255,8 +256,6 @@ namespace PersistentSRBSmoke
             if (_smoke == null || !HighLogic.LoadedSceneIsFlight)
                 return;
 
-            // Update optical parameters immediately before the flight camera renders. This keeps the
-            // HG phase angle and pseudo-normal lighting responsive while the user moves the camera.
             if (_settings.VolumetricLightingEnabled)
             {
                 Vessel activeVessel = FlightGlobals.ActiveVessel;
@@ -284,8 +283,6 @@ namespace PersistentSRBSmoke
                 _nextStockSmokeRefresh = now + _settings.StockSmokeRefreshInterval;
             }
 
-            // Engine FX controllers can re-enable their emitters during Update/FixedUpdate. Applying
-            // the cached suppression in LateUpdate ensures the stock smoke is still off at render time.
             _stockSmokeSuppressor.SuppressCached(_solidFuelParts);
         }
 
@@ -298,7 +295,6 @@ namespace PersistentSRBSmoke
             }
             catch
             {
-                // Scene changes can temporarily invalidate FlightCamera.fetch.
             }
 
             return Camera.main;
@@ -502,8 +498,6 @@ namespace PersistentSRBSmoke
             if (double.IsNaN(height) || double.IsInfinity(height) || height < 0.0)
                 return;
 
-            // Only capture the local surface while the rocket is actually close to it. This avoids
-            // treating an in-flight quickload at several kilometres as a new "launch surface".
             double captureLimit = Math.Max(150.0, _settings.NearGroundHoldHeight * 3.0);
             if (height > captureLimit)
                 return;
