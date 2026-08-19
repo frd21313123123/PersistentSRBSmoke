@@ -33,6 +33,12 @@
 7. Пресеты Performance / Realistic / Cinematic / Shuttle.
 8. Поддержка нестандартных твёрдых топлив из модов через конфиг.
 
+## Установка
+
+1. Скачайте архив `PersistentSRBSmoke-v*.zip` со страницы [Releases](https://github.com/frd21313123123/PersistentSRBSmoke/releases).
+2. Распакуйте архив в корневую папку Kerbal Space Program (или перенесите папку `PersistentSRBSmoke` в вашу папку `GameData/`).
+3. Итоговый путь к моду должен выглядеть как `<KSP_DIR>/GameData/PersistentSRBSmoke/`.
+
 ## Сборка DLL
 
 Нужны:

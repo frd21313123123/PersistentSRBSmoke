@@ -27,7 +27,11 @@ This is the first implementation pass. It does **not** yet include:
 - GPU instancing/custom smoke shader;
 - in-game settings GUI;
 - LOD merging for very old/distant smoke;
-- compatibility profiles for special mod fuels.
+## Installation
+
+1. Download the latest `PersistentSRBSmoke-v*.zip` from [Releases](https://github.com/frd21313123123/PersistentSRBSmoke/releases).
+2. Extract the archive into your main Kerbal Space Program root directory (or copy the `PersistentSRBSmoke` folder into your KSP `GameData/` folder).
+3. The resulting path should be `<KSP_DIR>/GameData/PersistentSRBSmoke/`.
 
 ## Build on Windows
 
