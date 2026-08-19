@@ -87,7 +87,8 @@ namespace PersistentSRBSmoke
             Vector3 previousPosition = emitter.LastPosition;
             emitter.LastPosition = currentPosition;
 
-            float travel = Vector3.Distance(previousPosition, currentPosition);
+            Vector3 travelVector = currentPosition - previousPosition;
+            float travel = travelVector.magnitude;
             if (travel > _settings.TeleportDistance)
             {
                 emitter.EmissionAccumulator = 0f;
@@ -103,19 +104,45 @@ namespace PersistentSRBSmoke
                 return;
 
             float thrustFactor = GetThrustFactor(engine);
+
+            // Keep the original continuous emission model for low-speed and stationary cases.
             float desired = (_settings.BaseEmissionRate * dt + travel * _settings.ParticlesPerMeter) * thrustFactor * atmosphere;
             emitter.EmissionAccumulator += desired;
+            int accumulatedCount = Mathf.FloorToInt(emitter.EmissionAccumulator);
 
-            int count = Mathf.Min(_settings.MaxEmitPerFrame, Mathf.FloorToInt(emitter.EmissionAccumulator));
+            // At high speed the old particles-per-meter accumulator could leave visible holes.
+            // Enforce a maximum longitudinal distance between emitted particles. We relax it
+            // slightly in thin atmosphere because the smoke is already much more transparent.
+            float effectiveSpacing = _settings.MaxParticleSpacing * Mathf.Lerp(1.6f, 1.0f, atmosphere);
+            int spacingCount = travel > 0.001f
+                ? Mathf.CeilToInt(travel / Mathf.Max(0.25f, effectiveSpacing))
+                : 0;
+
+            int count = Mathf.Min(_settings.MaxEmitPerFrame, Mathf.Max(accumulatedCount, spacingCount));
             if (count <= 0)
                 return;
 
-            emitter.EmissionAccumulator -= count;
+            // Consume only particles that came from the accumulator. Spacing-driven particles
+            // are additional samples whose only purpose is to keep the trail visually continuous.
+            emitter.EmissionAccumulator -= Mathf.Min(accumulatedCount, count);
 
             Vector3 up = vessel.upAxis;
             if (up.sqrMagnitude < 0.001f)
                 up = currentPosition.normalized;
             up.Normalize();
+
+            Vector3 trailDirection = travel > 0.001f ? travelVector / travel : -exhaust.forward;
+            if (trailDirection.sqrMagnitude < 0.001f)
+                trailDirection = up;
+            trailDirection.Normalize();
+
+            Vector3 tangentA = Vector3.Cross(trailDirection, up);
+            if (tangentA.sqrMagnitude < 0.001f)
+                tangentA = Vector3.Cross(trailDirection, Vector3.right);
+            if (tangentA.sqrMagnitude < 0.001f)
+                tangentA = Vector3.Cross(trailDirection, Vector3.forward);
+            tangentA.Normalize();
+            Vector3 tangentB = Vector3.Cross(trailDirection, tangentA).normalized;
 
             double universalTime = Planetarium.GetUniversalTime();
             Vector3 wind = _wind == null ? Vector3.zero : _wind.GetWind(vessel, up, universalTime);
@@ -123,10 +150,18 @@ namespace PersistentSRBSmoke
 
             for (int i = 0; i < count; i++)
             {
-                float t = count == 1 ? 1f : (i + UnityEngine.Random.value) / count;
+                // Stratified placement prevents particle bunching while still avoiding a perfectly regular pattern.
+                float slotJitter = UnityEngine.Random.Range(-0.18f, 0.18f);
+                float t = count == 1 ? 1f : ((i + 0.5f + slotJitter) / count);
                 Vector3 point = Vector3.Lerp(previousPosition, currentPosition, Mathf.Clamp01(t));
-                float radialJitter = _settings.StartSize * 0.18f;
-                point += UnityEngine.Random.insideUnitSphere * radialJitter;
+
+                // Jitter only across the trail. The previous 3D jitter also moved particles along
+                // the flight path and could re-open gaps that the interpolation had just filled.
+                float radialJitter = _settings.StartSize * scale * 0.10f;
+                float angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
+                float radius = Mathf.Sqrt(UnityEngine.Random.value) * radialJitter;
+                point += tangentA * (Mathf.Cos(angle) * radius) + tangentB * (Mathf.Sin(angle) * radius);
+
                 _smoke.Emit(point, up, wind, atmosphere, scale);
             }
         }
