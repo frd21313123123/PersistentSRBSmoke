@@ -222,10 +222,6 @@ namespace PersistentSRBSmoke
             if (atmosphere <= 0.001f)
                 return;
 
-            // This is the critical difference from the first implementation. The close plume must
-            // inherit almost all of the moving nozzle's world velocity. Without this term a rocket
-            // travelling at kilometres per second outruns each puff immediately, producing a row of
-            // detached white balls behind the vehicle.
             Vector3 emitterVelocity = travelVector / dt;
 
             float thrustFactor = GetThrustFactor(engine);
@@ -242,10 +238,10 @@ namespace PersistentSRBSmoke
                 return;
             emitter.Accumulator -= count;
 
-            Vector3 exhaustDirection = -exhaust.forward;
-            if (exhaustDirection.sqrMagnitude < 0.001f)
-                exhaustDirection = -vessel.upAxis;
-            exhaustDirection.Normalize();
+            // Stock and modded engines are not perfectly consistent about the sign of their thrust
+            // transforms. Resolve the direction against the physical nozzle side of the part so the
+            // smoke always exits away from the motor casing rather than occasionally through it.
+            Vector3 exhaustDirection = ResolveExhaustDirection(engine, exhaust, vessel);
 
             Vector3 up = vessel.upAxis;
             if (up.sqrMagnitude < 0.001f)
@@ -288,10 +284,12 @@ namespace PersistentSRBSmoke
                     * Mathf.Lerp(1f, 1.16f, thinAir)
                     * UnityEngine.Random.Range(0.88f, 1.10f);
 
-                Vector3 velocity = emitterVelocity * _settings.VelocityInheritance
-                    + exhaustDirection * jetSpeed
-                    + radialDirection * lateralSpeed
-                    + up * UnityEngine.Random.Range(-0.08f, 0.14f);
+                // Relative to the nozzle every puff now has a guaranteed positive component along
+                // exhaustDirection. Turbulence may widen the cone but cannot throw smoke into the
+                // opposite hemisphere.
+                Vector3 relativeVelocity = exhaustDirection * jetSpeed
+                    + radialDirection * lateralSpeed;
+                Vector3 velocity = emitterVelocity * _settings.VelocityInheritance + relativeVelocity;
 
                 float localBrightness = _settings.Brightness * UnityEngine.Random.Range(0.94f, 1.03f);
                 float warmth = _settings.Warmth;
@@ -316,6 +314,60 @@ namespace PersistentSRBSmoke
                 emit.rotation = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
                 _system.Emit(emit, 1);
             }
+        }
+
+        private static Vector3 ResolveExhaustDirection(ModuleEngines engine, Transform exhaust, Vessel vessel)
+        {
+            Vector3 fallback = vessel == null ? Vector3.down : -vessel.upAxis;
+            if (fallback.sqrMagnitude < 0.001f)
+                fallback = Vector3.down;
+            fallback.Normalize();
+
+            if (exhaust == null)
+                return fallback;
+
+            Vector3 forward = exhaust.forward;
+            if (forward.sqrMagnitude < 0.001f)
+                return fallback;
+            forward.Normalize();
+
+            if (engine == null || engine.part == null)
+                return -forward;
+
+            // Prefer the centre of the complete nozzle cluster. For multi-nozzle engines the vector
+            // from the part origin to one individual transform can point sideways, while the cluster
+            // centre still identifies which end of the motor contains the exits.
+            Vector3 outwardHint = Vector3.zero;
+            if (engine.thrustTransforms != null && engine.thrustTransforms.Count > 0)
+            {
+                Vector3 clusterCenter = Vector3.zero;
+                int valid = 0;
+                for (int i = 0; i < engine.thrustTransforms.Count; i++)
+                {
+                    Transform transform = engine.thrustTransforms[i];
+                    if (transform == null)
+                        continue;
+                    clusterCenter += transform.position;
+                    valid++;
+                }
+
+                if (valid > 0)
+                    outwardHint = clusterCenter / valid - engine.part.transform.position;
+            }
+
+            if (outwardHint.sqrMagnitude < 0.01f)
+                outwardHint = exhaust.position - engine.part.transform.position;
+
+            if (outwardHint.sqrMagnitude >= 0.01f)
+            {
+                outwardHint.Normalize();
+                float alignment = Vector3.Dot(forward, outwardHint);
+                if (Mathf.Abs(alignment) >= 0.20f)
+                    return alignment >= 0f ? forward : -forward;
+            }
+
+            // Preserve KSP's usual convention when geometry is too ambiguous to distinguish a side.
+            return -forward;
         }
 
         private void ScanEngines()
@@ -487,9 +539,6 @@ namespace PersistentSRBSmoke
             var shape = system.shape;
             shape.enabled = false;
 
-            // The particles start small and overlap densely. Most of the visible billow appears from
-            // growth during the next fractions of a second rather than from giant circular sprites
-            // being born already fully expanded.
             var size = system.sizeOverLifetime;
             size.enabled = true;
             float growth = Mathf.Max(1f, _settings.SizeGrowth);
