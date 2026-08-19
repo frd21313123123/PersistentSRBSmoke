@@ -46,13 +46,9 @@ namespace PersistentSRBSmoke
                 ? Mathf.Lerp(settings.SmallEngineSpacingMultiplier, settings.LargeEngineSpacingMultiplier, curve)
                 : 1f;
 
-            // When one engine exposes several thrust transforms, share the particle budget between
-            // them instead of treating every nozzle as a complete independent SRB.
             emission *= emitterShare;
             spacing *= Mathf.Sqrt(1f / emitterShare);
 
-            // Small separation motors are intentionally darker and a little warmer. Large boosters
-            // remain neutral grey, but the whole palette is darker than v0.3.
             Color smallColor = new Color(0.36f, 0.33f, 0.30f, 1f);
             Color largeColor = new Color(0.56f, 0.55f, 0.53f, 1f);
             Color baseColor = Color.Lerp(smallColor, largeColor, curve);
@@ -116,11 +112,22 @@ namespace PersistentSRBSmoke
         private SmokeSettings _settings;
         private SmokeParticlePool _smoke;
         private WindModel _wind;
+        private StockSmokeSuppressor _stockSmokeSuppressor;
+
         private readonly Dictionary<int, EngineEmitter> _emitters = new Dictionary<int, EngineEmitter>();
+        private readonly HashSet<Part> _solidFuelParts = new HashSet<Part>();
+
         private float _nextEngineScan;
         private float _nextDynamicMotion;
-        private float _lastDynamicMotion;
         private float _nextDebugLog;
+        private float _nextStockSmokeRefresh;
+
+        private bool _hasUniversalTime;
+        private double _lastUniversalTime;
+        private double _pendingDynamicGameTime;
+
+        private bool _hasSurfaceReference;
+        private float _surfaceReferenceAltitude;
 
         private void Start()
         {
@@ -136,9 +143,16 @@ namespace PersistentSRBSmoke
             {
                 _smoke = new SmokeParticlePool(_settings);
                 _wind = new WindModel(_settings);
+                if (_settings.SuppressStockSmoke)
+                    _stockSmokeSuppressor = new StockSmokeSuppressor();
+
                 ScanEngines();
-                _lastDynamicMotion = Time.realtimeSinceStartup;
-                Debug.Log("[PersistentSRBSmoke] v0.3.1 initialized with engine-specific smoke profiles.");
+
+                _lastUniversalTime = Planetarium.GetUniversalTime();
+                _hasUniversalTime = true;
+                _pendingDynamicGameTime = 0.0;
+
+                Debug.Log("[PersistentSRBSmoke] v0.3.2 initialized with UT time-warp sync, pad hold and stock-smoke suppression.");
             }
             catch (Exception ex)
             {
@@ -153,7 +167,6 @@ namespace PersistentSRBSmoke
                 return;
 
             float now = Time.realtimeSinceStartup;
-
             if (now >= _nextEngineScan)
             {
                 ScanEngines();
@@ -163,30 +176,92 @@ namespace PersistentSRBSmoke
             float dt = Mathf.Max(0.001f, Time.fixedDeltaTime);
             foreach (EngineEmitter emitter in _emitters.Values)
                 UpdateEmitter(emitter, dt);
+        }
 
+        private void Update()
+        {
+            if (_smoke == null || !HighLogic.LoadedSceneIsFlight)
+                return;
+
+            double universalTime = Planetarium.GetUniversalTime();
+            if (!_hasUniversalTime)
+            {
+                _lastUniversalTime = universalTime;
+                _hasUniversalTime = true;
+                return;
+            }
+
+            double rawGameDt = universalTime - _lastUniversalTime;
+            _lastUniversalTime = universalTime;
+
+            if (double.IsNaN(rawGameDt) || double.IsInfinity(rawGameDt) || rawGameDt < 0.0)
+            {
+                _pendingDynamicGameTime = 0.0;
+                return;
+            }
+
+            float gameDt = (float)Math.Min(rawGameDt, 100000.0);
+            float unityDt = Mathf.Max(0f, Time.deltaTime);
+
+            if (_settings.FollowUniversalTime && gameDt > 0f)
+                _pendingDynamicGameTime += gameDt;
+            else if (!_settings.FollowUniversalTime)
+                _pendingDynamicGameTime += unityDt;
+
+            float now = Time.realtimeSinceStartup;
             float dynamicInterval = 1f / Mathf.Max(1f, _settings.DynamicMotionHz);
-            if (now >= _nextDynamicMotion)
+            if (now >= _nextDynamicMotion && _pendingDynamicGameTime > 0.0)
             {
                 Vessel activeVessel = FlightGlobals.ActiveVessel;
                 if (activeVessel != null && activeVessel.mainBody != null)
                 {
-                    float dynamicDt = Mathf.Clamp(now - _lastDynamicMotion, 0.001f, 0.5f);
+                    float dynamicDt = (float)Math.Min(_pendingDynamicGameTime, 10000.0);
                     _smoke.UpdateDynamicMotion(
                         activeVessel.mainBody,
                         _wind,
-                        Planetarium.GetUniversalTime(),
-                        dynamicDt);
+                        universalTime,
+                        dynamicDt,
+                        _hasSurfaceReference,
+                        _surfaceReferenceAltitude);
+                    _pendingDynamicGameTime = 0.0;
                 }
 
-                _lastDynamicMotion = now;
                 _nextDynamicMotion = now + dynamicInterval;
             }
 
+            if (_settings.FollowUniversalTime)
+                _smoke.AdvanceUniversalTime(gameDt, unityDt);
+
             if (_settings.DebugLogging && now >= _nextDebugLog)
             {
-                Debug.Log("[PersistentSRBSmoke] SRB emitters=" + _emitters.Count + " particles=" + _smoke.ParticleCount);
+                float warpRatio = unityDt > 0.0001f ? gameDt / unityDt : 0f;
+                Debug.Log(
+                    "[PersistentSRBSmoke] SRB emitters=" + _emitters.Count +
+                    " particles=" + _smoke.ParticleCount +
+                    " UTdt=" + gameDt.ToString("F2") +
+                    " effectiveWarp=" + warpRatio.ToString("F1") + "x");
                 _nextDebugLog = now + 5f;
             }
+        }
+
+        private void LateUpdate()
+        {
+            if (_stockSmokeSuppressor == null || !_settings.SuppressStockSmoke || !HighLogic.LoadedSceneIsFlight)
+                return;
+
+            float now = Time.realtimeSinceStartup;
+            if (now >= _nextStockSmokeRefresh)
+            {
+                foreach (Part part in _solidFuelParts)
+                    _stockSmokeSuppressor.RefreshPart(part);
+
+                _stockSmokeSuppressor.ForgetMissing(_solidFuelParts);
+                _nextStockSmokeRefresh = now + _settings.StockSmokeRefreshInterval;
+            }
+
+            // Engine FX controllers can re-enable their emitters during Update/FixedUpdate. Applying
+            // the cached suppression in LateUpdate ensures the stock smoke is still off at render time.
+            _stockSmokeSuppressor.SuppressCached(_solidFuelParts);
         }
 
         private void UpdateEmitter(EngineEmitter emitter, float dt)
@@ -219,6 +294,8 @@ namespace PersistentSRBSmoke
                 return;
 
             Vessel vessel = engine.vessel;
+            TryCaptureSurfaceReference(vessel);
+
             float atmosphere = GetAtmosphereFactor(vessel);
             if (atmosphere <= 0.001f)
                 return;
@@ -233,9 +310,6 @@ namespace PersistentSRBSmoke
             emitter.EmissionAccumulator += desired;
             int accumulatedCount = Mathf.FloorToInt(emitter.EmissionAccumulator);
 
-            // The continuity budget now scales with engine size too. A tiny separation motor is
-            // allowed a much larger spacing than a Shuttle-class SRB, so it no longer paints the
-            // same huge persistent tube along the trajectory.
             float effectiveSpacing = _settings.MaxParticleSpacing
                 * Mathf.Lerp(_settings.HighAltitudeSpacingMultiplier, 1.0f, atmosphere)
                 * profile.SpacingMultiplier;
@@ -270,6 +344,7 @@ namespace PersistentSRBSmoke
             double universalTime = Planetarium.GetUniversalTime();
             Vector3 wind = _wind == null ? Vector3.zero : _wind.GetWind(vessel, up, universalTime);
             float scale = Mathf.Lerp(0.78f, 1.30f, Mathf.Sqrt(thrustFactor));
+            float heightAboveGround = GetHeightAboveGround(vessel);
 
             for (int i = 0; i < count; i++)
             {
@@ -282,13 +357,14 @@ namespace PersistentSRBSmoke
                 float radius = Mathf.Sqrt(UnityEngine.Random.value) * radialJitter;
                 point += tangentA * (Mathf.Cos(angle) * radius) + tangentB * (Mathf.Sin(angle) * radius);
 
-                _smoke.Emit(point, up, wind, atmosphere, scale, profile);
+                _smoke.Emit(point, up, wind, atmosphere, scale, profile, heightAboveGround);
             }
         }
 
         private void ScanEngines()
         {
             var seen = new HashSet<int>();
+            _solidFuelParts.Clear();
 
             IList<Vessel> vessels = FlightGlobals.VesselsLoaded;
             if (vessels == null)
@@ -306,12 +382,14 @@ namespace PersistentSRBSmoke
                     if (part == null || part.Modules == null)
                         continue;
 
+                    bool hasSolidEngine = false;
                     for (int m = 0; m < part.Modules.Count; m++)
                     {
                         ModuleEngines engine = part.Modules[m] as ModuleEngines;
                         if (engine == null || !UsesSolidFuel(engine))
                             continue;
 
+                        hasSolidEngine = true;
                         if (engine.thrustTransforms != null && engine.thrustTransforms.Count > 0)
                         {
                             float share = 1f / engine.thrustTransforms.Count;
@@ -323,11 +401,11 @@ namespace PersistentSRBSmoke
                             RegisterEmitter(engine, part.transform, seen, 1f);
                         }
                     }
+
+                    if (hasSolidEngine)
+                        _solidFuelParts.Add(part);
                 }
             }
-
-            if (_emitters.Count == seen.Count)
-                return;
 
             var toRemove = new List<int>();
             foreach (KeyValuePair<int, EngineEmitter> pair in _emitters)
@@ -373,6 +451,44 @@ namespace PersistentSRBSmoke
                     " size=" + profile.SizeMultiplier.ToString("F2") +
                     " lifetime=" + profile.LifetimeMultiplier.ToString("F2"));
             }
+        }
+
+        private void TryCaptureSurfaceReference(Vessel vessel)
+        {
+            if (_hasSurfaceReference || vessel == null)
+                return;
+
+            double height = vessel.heightFromTerrain;
+            if (double.IsNaN(height) || double.IsInfinity(height) || height < 0.0)
+                return;
+
+            // Only capture the local surface while the rocket is actually close to it. This avoids
+            // treating an in-flight quickload at several kilometres as a new "launch surface".
+            double captureLimit = Math.Max(150.0, _settings.NearGroundHoldHeight * 3.0);
+            if (height > captureLimit)
+                return;
+
+            _surfaceReferenceAltitude = (float)(vessel.altitude - height);
+            _hasSurfaceReference = true;
+
+            if (_settings.DebugLogging)
+            {
+                Debug.Log(
+                    "[PersistentSRBSmoke] Captured launch surface altitude=" +
+                    _surfaceReferenceAltitude.ToString("F1") + "m ASL");
+            }
+        }
+
+        private static float GetHeightAboveGround(Vessel vessel)
+        {
+            if (vessel == null)
+                return -1f;
+
+            double height = vessel.heightFromTerrain;
+            if (double.IsNaN(height) || double.IsInfinity(height) || height < 0.0)
+                return -1f;
+
+            return Mathf.Max(0f, (float)height);
         }
 
         private static bool UsesSolidFuel(ModuleEngines engine)
@@ -430,7 +546,15 @@ namespace PersistentSRBSmoke
                 _smoke.Dispose();
                 _smoke = null;
             }
+
+            if (_stockSmokeSuppressor != null)
+            {
+                _stockSmokeSuppressor.Clear();
+                _stockSmokeSuppressor = null;
+            }
+
             _wind = null;
+            _solidFuelParts.Clear();
             _emitters.Clear();
         }
     }
