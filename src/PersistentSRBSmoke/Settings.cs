@@ -19,7 +19,7 @@ namespace PersistentSRBSmoke
         public bool FollowUniversalTime = true;
         public float MaxWarpSimulationStep = 5f;
 
-        // Suppress stock / legacy smoke so only this mod owns the persistent SRB trail.
+        // Suppress stock / legacy smoke
         public bool SuppressStockSmoke = true;
         public float StockSmokeRefreshInterval = 0.75f;
 
@@ -30,7 +30,7 @@ namespace PersistentSRBSmoke
         public float HighAltitudeSpacingMultiplier = 1.25f;
         public float ThinAtmosphereDensityFloor = 0.42f;
 
-        // Visual plume size
+        // Visual plume size / base albedo
         public float StartSize = 8.0f;
         public float SizeGrowth = 18.0f;
         public float HighAltitudeSizeMultiplier = 1.85f;
@@ -38,7 +38,7 @@ namespace PersistentSRBSmoke
         public float SmokeBrightness = 0.78f;
         public float EngineColorVariation = 0.08f;
 
-        // Volumetric-inspired optical model.
+        // Optical model shared by raymarch and fallback paths
         public bool VolumetricLightingEnabled = true;
         public float VolumetricScatteringForward = 0.85f;
         public float VolumetricScatteringBackward = -0.35f;
@@ -47,6 +47,22 @@ namespace PersistentSRBSmoke
         public float VolumetricSunIntensity = 1.10f;
         public float VolumetricAmbientIntensity = 0.46f;
         public float VolumetricBeerPowderFactor = 0.72f;
+
+        // True raymarched density volume. This path activates automatically when the custom shader
+        // is available through a .shab asset bundle (normally loaded by Shabby).
+        public bool RaymarchedVolumetricEnabled = true;
+        public int RaymarchMaxCloudlets = 7000;
+        public int RaymarchSteps = 24;
+        public int RaymarchShadowSteps = 4;
+        public float RaymarchDensityMultiplier = 1.15f;
+        public float RaymarchExtinction = 2.10f;
+
+        // Dependency-free 3D slice-volume fallback. Cards are distributed through the cloudlet
+        // volume instead of all crossing at its centre.
+        public int NativeVolumeSlicesPerAxis = 5;
+        public float NativeVolumeSliceOpacity = 0.20f;
+        public float FallbackMinimumLight = 0.72f;
+        public float FallbackCoreShadow = 0.16f;
 
         // Engine-dependent smoke scaling. KSP engine thrust is measured in kN.
         public bool EngineScalingEnabled = true;
@@ -72,14 +88,13 @@ namespace PersistentSRBSmoke
         public float TurbulenceStrength = 1.1f;
         public float TurbulenceFrequency = 0.055f;
 
-        // Near-pad hold. Wind stays weak here so the whole cloud is not translated off the pad.
+        // Near-pad hold
         public float NearGroundHoldHeight = 60f;
         public float NearGroundWindMultiplier = 0.12f;
         public float NearGroundDiffusionMultiplier = 0.25f;
         public float NearGroundBuoyancyMultiplier = 0.40f;
 
-        // Density-driven launch-pad cloud. Dense exhaust is pushed sideways across the ground while
-        // the thinning outer lobes curl upward, approximating the large Shuttle-style pad billow.
+        // Density-driven launch-pad cloud
         public bool PadCloudEnabled = true;
         public float PadCloudHeight = 120f;
         public float PadCloudCellSize = 18f;
@@ -148,6 +163,18 @@ namespace PersistentSRBSmoke
                 settings.VolumetricAmbientIntensity = ReadFloat(node, "volumetricAmbientIntensity", settings.VolumetricAmbientIntensity, 0f, 3f);
                 settings.VolumetricBeerPowderFactor = ReadFloat(node, "volumetricBeerPowderFactor", settings.VolumetricBeerPowderFactor, 0.01f, 3f);
 
+                settings.RaymarchedVolumetricEnabled = ReadBool(node, "raymarchedVolumetricEnabled", settings.RaymarchedVolumetricEnabled);
+                settings.RaymarchMaxCloudlets = ReadInt(node, "raymarchMaxCloudlets", settings.RaymarchMaxCloudlets, 128, 50000);
+                settings.RaymarchSteps = ReadInt(node, "raymarchSteps", settings.RaymarchSteps, 8, 32);
+                settings.RaymarchShadowSteps = ReadInt(node, "raymarchShadowSteps", settings.RaymarchShadowSteps, 1, 6);
+                settings.RaymarchDensityMultiplier = ReadFloat(node, "raymarchDensityMultiplier", settings.RaymarchDensityMultiplier, 0.1f, 4f);
+                settings.RaymarchExtinction = ReadFloat(node, "raymarchExtinction", settings.RaymarchExtinction, 0.1f, 8f);
+
+                settings.NativeVolumeSlicesPerAxis = ReadInt(node, "nativeVolumeSlicesPerAxis", settings.NativeVolumeSlicesPerAxis, 3, 9);
+                settings.NativeVolumeSliceOpacity = ReadFloat(node, "nativeVolumeSliceOpacity", settings.NativeVolumeSliceOpacity, 0.03f, 0.8f);
+                settings.FallbackMinimumLight = ReadFloat(node, "fallbackMinimumLight", settings.FallbackMinimumLight, 0.35f, 1.1f);
+                settings.FallbackCoreShadow = ReadFloat(node, "fallbackCoreShadow", settings.FallbackCoreShadow, 0f, 0.5f);
+
                 settings.EngineScalingEnabled = ReadBool(node, "engineScalingEnabled", settings.EngineScalingEnabled);
                 settings.EngineMinThrust = ReadFloat(node, "engineMinThrust", settings.EngineMinThrust, 0.1f, 5000f);
                 settings.EngineMaxThrust = ReadFloat(node, "engineMaxThrust", settings.EngineMaxThrust, 0.2f, 20000f);
@@ -202,6 +229,8 @@ namespace PersistentSRBSmoke
                 settings.EngineMaxThrust = settings.EngineMinThrust + 1f;
             if (settings.PadCloudDensitySaturation <= settings.PadCloudDensityThreshold)
                 settings.PadCloudDensitySaturation = settings.PadCloudDensityThreshold + 1f;
+            if ((settings.NativeVolumeSlicesPerAxis & 1) == 0)
+                settings.NativeVolumeSlicesPerAxis = Math.Min(9, settings.NativeVolumeSlicesPerAxis + 1);
 
             return settings;
         }
