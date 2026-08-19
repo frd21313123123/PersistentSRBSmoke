@@ -9,9 +9,8 @@ namespace PersistentSRBSmoke
     /// Short-lived, high-detail smoke immediately behind active SRB nozzles.
     ///
     /// The persistent trail intentionally stays in SmokeParticlePool. This layer is a separate
-    /// billboard system with much faster growth and fade, borrowing the strongest architectural
-    /// idea from mature KSP plume packs: the nozzle region and the long-lived trail are different
-    /// visual problems and should not be rendered with the same particle profile.
+    /// billboard system whose particles inherit most of the nozzle world velocity. That keeps the
+    /// close plume visually attached to a fast rocket instead of leaving a chain of isolated puffs.
     /// </summary>
     [KSPAddon(KSPAddon.Startup.Flight, false)]
     public sealed class NearNozzleSmokeLayer : MonoBehaviour
@@ -19,23 +18,24 @@ namespace PersistentSRBSmoke
         private sealed class LayerSettings
         {
             public bool Enabled = true;
-            public int MaxParticles = 7000;
-            public float EmissionRate = 52f;
-            public float ParticlesPerMeter = 0.20f;
-            public int MaxEmitPerFrame = 32;
-            public float Lifetime = 1.60f;
-            public float StartSize = 2.40f;
-            public float SizeGrowth = 4.60f;
-            public float Opacity = 0.90f;
-            public float InitialSpeed = 9.0f;
-            public float SpreadSpeed = 2.15f;
-            public float Offset = 0.55f;
-            public float RadialJitter = 0.34f;
-            public float Turbulence = 0.72f;
-            public float TurbulenceFrequency = 0.18f;
-            public float HighAltitudeSizeMultiplier = 1.60f;
-            public float Brightness = 0.88f;
-            public float Warmth = 0.07f;
+            public int MaxParticles = 6500;
+            public float EmissionRate = 110f;
+            public float ParticlesPerMeter = 0.70f;
+            public int MaxEmitPerFrame = 96;
+            public float Lifetime = 0.90f;
+            public float StartSize = 1.35f;
+            public float SizeGrowth = 5.30f;
+            public float Opacity = 0.72f;
+            public float InitialSpeed = 12.0f;
+            public float VelocityInheritance = 0.97f;
+            public float SpreadSpeed = 1.10f;
+            public float Offset = 0.25f;
+            public float RadialJitter = 0.12f;
+            public float Turbulence = 0.52f;
+            public float TurbulenceFrequency = 0.12f;
+            public float HighAltitudeSizeMultiplier = 1.45f;
+            public float Brightness = 0.80f;
+            public float Warmth = 0.035f;
             public float EngineMinThrust = 8f;
             public float EngineMaxThrust = 800f;
             public float TeleportDistance = 750f;
@@ -53,19 +53,18 @@ namespace PersistentSRBSmoke
                     if (node == null)
                         return settings;
 
-                    // The global switch still owns the whole mod. nearNozzleEnabled only controls
-                    // this additional close-range layer.
                     settings.Enabled = ReadBool(node, "enabled", true)
                         && ReadBool(node, "nearNozzleEnabled", settings.Enabled);
                     settings.MaxParticles = ReadInt(node, "nearNozzleMaxParticles", settings.MaxParticles, 250, 30000);
                     settings.EmissionRate = ReadFloat(node, "nearNozzleEmissionRate", settings.EmissionRate, 0f, 500f);
                     settings.ParticlesPerMeter = ReadFloat(node, "nearNozzleParticlesPerMeter", settings.ParticlesPerMeter, 0f, 5f);
                     settings.MaxEmitPerFrame = ReadInt(node, "nearNozzleMaxEmitPerFrame", settings.MaxEmitPerFrame, 1, 256);
-                    settings.Lifetime = ReadFloat(node, "nearNozzleLifetime", settings.Lifetime, 0.15f, 10f);
+                    settings.Lifetime = ReadFloat(node, "nearNozzleLifetime", settings.Lifetime, 0.10f, 10f);
                     settings.StartSize = ReadFloat(node, "nearNozzleStartSize", settings.StartSize, 0.05f, 50f);
                     settings.SizeGrowth = ReadFloat(node, "nearNozzleSizeGrowth", settings.SizeGrowth, 1f, 12f);
                     settings.Opacity = ReadFloat(node, "nearNozzleOpacity", settings.Opacity, 0.01f, 1f);
                     settings.InitialSpeed = ReadFloat(node, "nearNozzleInitialSpeed", settings.InitialSpeed, 0f, 80f);
+                    settings.VelocityInheritance = ReadFloat(node, "nearNozzleVelocityInheritance", settings.VelocityInheritance, 0f, 1f);
                     settings.SpreadSpeed = ReadFloat(node, "nearNozzleSpreadSpeed", settings.SpreadSpeed, 0f, 30f);
                     settings.Offset = ReadFloat(node, "nearNozzleOffset", settings.Offset, 0f, 20f);
                     settings.RadialJitter = ReadFloat(node, "nearNozzleRadialJitter", settings.RadialJitter, 0f, 3f);
@@ -87,7 +86,6 @@ namespace PersistentSRBSmoke
 
                 if (settings.EngineMaxThrust <= settings.EngineMinThrust)
                     settings.EngineMaxThrust = settings.EngineMinThrust + 1f;
-
                 return settings;
             }
 
@@ -155,13 +153,12 @@ namespace PersistentSRBSmoke
             {
                 CreateParticleSystem();
                 ScanEngines();
-
                 if (_settings.DebugLogging)
                 {
                     Debug.Log(
                         "[PersistentSRBSmoke] Near-nozzle layer enabled: maxParticles=" + _settings.MaxParticles +
                         " lifetime=" + _settings.Lifetime.ToString("F2") +
-                        " emissionRate=" + _settings.EmissionRate.ToString("F1"));
+                        " velocityInheritance=" + _settings.VelocityInheritance.ToString("F3"));
                 }
             }
             catch (Exception ex)
@@ -225,6 +222,12 @@ namespace PersistentSRBSmoke
             if (atmosphere <= 0.001f)
                 return;
 
+            // This is the critical difference from the first implementation. The close plume must
+            // inherit almost all of the moving nozzle's world velocity. Without this term a rocket
+            // travelling at kilometres per second outruns each puff immediately, producing a row of
+            // detached white balls behind the vehicle.
+            Vector3 emitterVelocity = travelVector / dt;
+
             float thrustFactor = GetThrustFactor(engine);
             float engineWeight = Mathf.Lerp(0.72f, 1.28f, Mathf.SmoothStep(0f, 1f, emitter.Strength));
             float desired = (_settings.EmissionRate * dt + travel * _settings.ParticlesPerMeter)
@@ -264,12 +267,10 @@ namespace PersistentSRBSmoke
 
             for (int i = 0; i < count; i++)
             {
-                float slotJitter = UnityEngine.Random.Range(-0.16f, 0.16f);
+                float slotJitter = UnityEngine.Random.Range(-0.08f, 0.08f);
                 float t = count == 1 ? 1f : Mathf.Clamp01((i + 0.5f + slotJitter) / count);
                 Vector3 position = Vector3.Lerp(previousPosition, currentPosition, t);
 
-                // Offset the dense layer just behind the nozzle. A little radial jitter prevents
-                // a perfectly cylindrical "tube" and makes separate SRB nozzles blend naturally.
                 position += exhaustDirection * (_settings.Offset * sizeScale);
                 float angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
                 float radius = Mathf.Sqrt(UnityEngine.Random.value)
@@ -280,36 +281,37 @@ namespace PersistentSRBSmoke
                 position += radialDirection * radius;
 
                 float lateralSpeed = _settings.SpreadSpeed
-                    * Mathf.Lerp(0.70f, 1.18f, thinAir)
-                    * UnityEngine.Random.Range(0.35f, 1.15f);
+                    * Mathf.Lerp(0.82f, 1.12f, thinAir)
+                    * UnityEngine.Random.Range(0.35f, 1.00f);
                 float jetSpeed = _settings.InitialSpeed
-                    * Mathf.Lerp(0.72f, 1.16f, thrustFactor)
-                    * Mathf.Lerp(1f, 1.20f, thinAir)
-                    * UnityEngine.Random.Range(0.82f, 1.16f);
+                    * Mathf.Lerp(0.76f, 1.10f, thrustFactor)
+                    * Mathf.Lerp(1f, 1.16f, thinAir)
+                    * UnityEngine.Random.Range(0.88f, 1.10f);
 
-                Vector3 velocity = exhaustDirection * jetSpeed
+                Vector3 velocity = emitterVelocity * _settings.VelocityInheritance
+                    + exhaustDirection * jetSpeed
                     + radialDirection * lateralSpeed
-                    + up * UnityEngine.Random.Range(-0.12f, 0.22f);
+                    + up * UnityEngine.Random.Range(-0.08f, 0.14f);
 
-                float localBrightness = _settings.Brightness * UnityEngine.Random.Range(0.92f, 1.05f);
+                float localBrightness = _settings.Brightness * UnityEngine.Random.Range(0.94f, 1.03f);
                 float warmth = _settings.Warmth;
                 Color color = new Color(
-                    Mathf.Clamp01(localBrightness * (1f + warmth * 0.10f)),
-                    Mathf.Clamp01(localBrightness * (1f - warmth * 0.04f)),
-                    Mathf.Clamp01(localBrightness * (1f - warmth * 0.16f)),
+                    Mathf.Clamp01(localBrightness * (1f + warmth * 0.08f)),
+                    Mathf.Clamp01(localBrightness * (1f - warmth * 0.03f)),
+                    Mathf.Clamp01(localBrightness * (1f - warmth * 0.12f)),
                     Mathf.Clamp01(_settings.Opacity
-                        * Mathf.Lerp(0.72f, 1f, atmosphere)
-                        * UnityEngine.Random.Range(0.86f, 1f)));
+                        * Mathf.Lerp(0.68f, 1f, atmosphere)
+                        * UnityEngine.Random.Range(0.88f, 1f)));
 
                 var emit = new ParticleSystem.EmitParams();
                 emit.position = position;
                 emit.velocity = velocity;
                 emit.startLifetime = _settings.Lifetime
-                    * Mathf.Lerp(1.02f, 0.82f, thinAir)
-                    * UnityEngine.Random.Range(0.88f, 1.12f);
+                    * Mathf.Lerp(1.0f, 0.82f, thinAir)
+                    * UnityEngine.Random.Range(0.90f, 1.08f);
                 emit.startSize = _settings.StartSize
                     * sizeScale
-                    * UnityEngine.Random.Range(0.78f, 1.24f);
+                    * UnityEngine.Random.Range(0.86f, 1.14f);
                 emit.startColor = color;
                 emit.rotation = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
                 _system.Emit(emit, 1);
@@ -361,7 +363,6 @@ namespace PersistentSRBSmoke
                 if (!_seenEmitters.Contains(pair.Key))
                     _emittersToRemove.Add(pair.Key);
             }
-
             for (int i = 0; i < _emittersToRemove.Count; i++)
                 _emitters.Remove(_emittersToRemove[i]);
         }
@@ -392,7 +393,6 @@ namespace PersistentSRBSmoke
         {
             if (engine == null)
                 return 1f;
-
             float thrust = Mathf.Max(0.1f, engine.maxThrust);
             float minLog = Mathf.Log10(Mathf.Max(0.1f, _settings.EngineMinThrust));
             float maxLog = Mathf.Log10(Mathf.Max(_settings.EngineMinThrust + 0.1f, _settings.EngineMaxThrust));
@@ -403,7 +403,6 @@ namespace PersistentSRBSmoke
         {
             if (engine == null || engine.propellants == null)
                 return false;
-
             for (int i = 0; i < engine.propellants.Count; i++)
             {
                 Propellant propellant = engine.propellants[i];
@@ -415,10 +414,7 @@ namespace PersistentSRBSmoke
 
         private static bool IsProducingThrust(ModuleEngines engine)
         {
-            return engine != null
-                && engine.EngineIgnited
-                && !engine.flameout
-                && engine.finalThrust > 0.01f;
+            return engine != null && engine.EngineIgnited && !engine.flameout && engine.finalThrust > 0.01f;
         }
 
         private static float GetThrustFactor(ModuleEngines engine)
@@ -441,7 +437,6 @@ namespace PersistentSRBSmoke
             float altitudeRatio = Mathf.Clamp01(altitude / atmosphereDepth);
             float edgeT = Mathf.Clamp01((altitudeRatio - 0.90f) / 0.10f);
             float edgeFade = 1f - Mathf.SmoothStep(0f, 1f, edgeT);
-
             double pressureKpa = vessel.staticPressurekPa;
             float normalizedPressure = Mathf.Clamp01((float)(pressureKpa / 101.325));
             float pressureResponse = Mathf.Pow(normalizedPressure, 0.16f);
@@ -472,7 +467,6 @@ namespace PersistentSRBSmoke
             {
                 Debug.LogWarning("[PersistentSRBSmoke] Could not register near-nozzle particles with FloatingOrigin: " + ex.Message);
             }
-
             _system.Play();
         }
 
@@ -490,21 +484,21 @@ namespace PersistentSRBSmoke
 
             var emission = system.emission;
             emission.enabled = false;
-
             var shape = system.shape;
             shape.enabled = false;
 
-            // Fast initial expansion creates the dense rolling shoulder visible directly behind an
-            // SRB nozzle. The long-lived pool takes over once these particles have faded.
+            // The particles start small and overlap densely. Most of the visible billow appears from
+            // growth during the next fractions of a second rather than from giant circular sprites
+            // being born already fully expanded.
             var size = system.sizeOverLifetime;
             size.enabled = true;
             float growth = Mathf.Max(1f, _settings.SizeGrowth);
             AnimationCurve expansion = new AnimationCurve(
-                new Keyframe(0.00f, 1.00f, 3.5f, 3.5f),
-                new Keyframe(0.10f, Mathf.Min(growth, 1.45f), 4.0f, 4.0f),
-                new Keyframe(0.28f, Mathf.Min(growth, 2.15f), 4.5f, 4.5f),
-                new Keyframe(0.62f, Mathf.Min(growth, 3.55f), 3.0f, 3.0f),
-                new Keyframe(1.00f, growth, 0.8f, 0f));
+                new Keyframe(0.00f, 0.72f, 4.5f, 4.5f),
+                new Keyframe(0.08f, 1.05f, 4.5f, 4.5f),
+                new Keyframe(0.22f, Mathf.Min(growth, 1.80f), 5.0f, 5.0f),
+                new Keyframe(0.50f, Mathf.Min(growth, 3.20f), 4.0f, 4.0f),
+                new Keyframe(1.00f, growth, 1.0f, 0f));
             size.size = new ParticleSystem.MinMaxCurve(1f, expansion);
 
             var color = system.colorOverLifetime;
@@ -513,17 +507,17 @@ namespace PersistentSRBSmoke
             gradient.SetKeys(
                 new[]
                 {
-                    new GradientColorKey(new Color(1.00f, 0.98f, 0.94f), 0.00f),
-                    new GradientColorKey(new Color(0.98f, 0.97f, 0.94f), 0.16f),
-                    new GradientColorKey(new Color(0.91f, 0.91f, 0.90f), 0.48f),
-                    new GradientColorKey(new Color(0.82f, 0.84f, 0.85f), 1.00f)
+                    new GradientColorKey(new Color(0.90f, 0.89f, 0.86f), 0.00f),
+                    new GradientColorKey(new Color(0.86f, 0.86f, 0.84f), 0.16f),
+                    new GradientColorKey(new Color(0.81f, 0.82f, 0.82f), 0.48f),
+                    new GradientColorKey(new Color(0.75f, 0.77f, 0.78f), 1.00f)
                 },
                 new[]
                 {
-                    new GradientAlphaKey(1.00f, 0.00f),
-                    new GradientAlphaKey(0.92f, 0.12f),
-                    new GradientAlphaKey(0.68f, 0.42f),
-                    new GradientAlphaKey(0.30f, 0.72f),
+                    new GradientAlphaKey(0.82f, 0.00f),
+                    new GradientAlphaKey(0.76f, 0.12f),
+                    new GradientAlphaKey(0.55f, 0.42f),
+                    new GradientAlphaKey(0.24f, 0.72f),
                     new GradientAlphaKey(0.00f, 1.00f)
                 });
             color.color = new ParticleSystem.MinMaxGradient(gradient);
@@ -533,7 +527,7 @@ namespace PersistentSRBSmoke
             noise.quality = ParticleSystemNoiseQuality.Medium;
             noise.strength = _settings.Turbulence;
             noise.frequency = _settings.TurbulenceFrequency;
-            noise.scrollSpeed = 0.20f;
+            noise.scrollSpeed = 0.14f;
             noise.damping = true;
             noise.octaveCount = 2;
         }
@@ -571,26 +565,19 @@ namespace PersistentSRBSmoke
                     float u = (x + 0.5f) / size * 2f - 1f;
                     float v = (y + 0.5f) / size * 2f - 1f;
                     float radius = Mathf.Sqrt(u * u + v * v);
+                    float macro = Mathf.PerlinNoise(seedX + u * 1.7f, seedY + v * 1.7f);
+                    float billow = Mathf.PerlinNoise(seedX * 0.41f + u * 4.2f, seedY * 0.41f + v * 4.2f);
+                    float detail = Mathf.PerlinNoise(seedX * 0.17f + u * 8.4f, seedY * 0.17f + v * 8.4f);
 
-                    float macro = Mathf.PerlinNoise(seedX + u * 1.8f, seedY + v * 1.8f);
-                    float billow = Mathf.PerlinNoise(seedX * 0.41f + u * 4.6f, seedY * 0.41f + v * 4.6f);
-                    float detail = Mathf.PerlinNoise(seedX * 0.17f + u * 9.2f, seedY * 0.17f + v * 9.2f);
-
-                    // Irregular edge plus dense billowing interior. Compared with the persistent
-                    // trail texture this has a broader opaque core and more high-frequency breakup.
-                    float edgeWarp = (macro - 0.5f) * 0.22f + (billow - 0.5f) * 0.09f;
+                    float edgeWarp = (macro - 0.5f) * 0.28f + (billow - 0.5f) * 0.12f;
                     float radial = Mathf.Clamp01(1f - (radius + edgeWarp));
-                    radial = Mathf.Pow(radial, 0.48f);
-
-                    float interior = Mathf.Clamp01(macro * 0.42f + billow * 0.40f + detail * 0.18f);
-                    float alpha = radial * Mathf.Lerp(0.58f, 1f, interior);
-                    alpha *= Mathf.Lerp(0.82f, 1f, Mathf.Clamp01((radial - 0.15f) * 1.35f));
-                    alpha = Mathf.Clamp01((alpha - 0.012f) * 1.12f);
-
+                    radial = Mathf.Pow(radial, 0.62f);
+                    float interior = Mathf.Clamp01(macro * 0.44f + billow * 0.39f + detail * 0.17f);
+                    float alpha = radial * Mathf.Lerp(0.38f, 0.88f, interior);
+                    alpha = Mathf.Clamp01((alpha - 0.020f) * 1.08f);
                     texture.SetPixel(x, y, new Color(1f, 1f, 1f, alpha));
                 }
             }
-
             texture.Apply(false, true);
             return texture;
         }
@@ -607,11 +594,9 @@ namespace PersistentSRBSmoke
             _emitters.Clear();
             _seenEmitters.Clear();
             _emittersToRemove.Clear();
-
             if (_material != null) UnityEngine.Object.Destroy(_material);
             if (_texture != null) UnityEngine.Object.Destroy(_texture);
             if (_particleObject != null) UnityEngine.Object.Destroy(_particleObject);
-
             _material = null;
             _texture = null;
             _system = null;
