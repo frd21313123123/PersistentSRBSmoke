@@ -238,9 +238,6 @@ namespace PersistentSRBSmoke
                 return;
             emitter.Accumulator -= count;
 
-            // Stock and modded engines are not perfectly consistent about the sign of their thrust
-            // transforms. Resolve the direction against the physical nozzle side of the part so the
-            // smoke always exits away from the motor casing rather than occasionally through it.
             Vector3 exhaustDirection = ResolveExhaustDirection(engine, exhaust, vessel);
 
             Vector3 up = vessel.upAxis;
@@ -284,9 +281,6 @@ namespace PersistentSRBSmoke
                     * Mathf.Lerp(1f, 1.16f, thinAir)
                     * UnityEngine.Random.Range(0.88f, 1.10f);
 
-                // Relative to the nozzle every puff now has a guaranteed positive component along
-                // exhaustDirection. Turbulence may widen the cone but cannot throw smoke into the
-                // opposite hemisphere.
                 Vector3 relativeVelocity = exhaustDirection * jetSpeed
                     + radialDirection * lateralSpeed;
                 Vector3 velocity = emitterVelocity * _settings.VelocityInheritance + relativeVelocity;
@@ -318,7 +312,9 @@ namespace PersistentSRBSmoke
 
         private static Vector3 ResolveExhaustDirection(ModuleEngines engine, Transform exhaust, Vessel vessel)
         {
-            Vector3 fallback = vessel == null ? Vector3.down : -vessel.upAxis;
+            Vector3 fallback = Vector3.down;
+            if (vessel != null)
+                fallback = -vessel.upAxis;
             if (fallback.sqrMagnitude < 0.001f)
                 fallback = Vector3.down;
             fallback.Normalize();
@@ -334,9 +330,6 @@ namespace PersistentSRBSmoke
             if (engine == null || engine.part == null)
                 return -forward;
 
-            // Prefer the centre of the complete nozzle cluster. For multi-nozzle engines the vector
-            // from the part origin to one individual transform can point sideways, while the cluster
-            // centre still identifies which end of the motor contains the exits.
             Vector3 outwardHint = Vector3.zero;
             if (engine.thrustTransforms != null && engine.thrustTransforms.Count > 0)
             {
@@ -366,7 +359,6 @@ namespace PersistentSRBSmoke
                     return alignment >= 0f ? forward : -forward;
             }
 
-            // Preserve KSP's usual convention when geometry is too ambiguous to distinguish a side.
             return -forward;
         }
 
