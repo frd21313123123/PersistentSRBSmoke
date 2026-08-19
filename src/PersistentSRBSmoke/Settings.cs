@@ -75,10 +75,10 @@ namespace PersistentSRBSmoke
         // Local cloud motion / diffusion. This remains independent of the prevailing wind so smoke
         // continues to widen at every altitude instead of behaving like a rigid ribbon.
         public float DriftSpeed = 1.8f;
-        public float DiffusionSpeed = 4.0f;
-        public float DiffusionGrowth = 1.75f;
+        public float DiffusionSpeed = 4.4f;
+        public float DiffusionGrowth = 1.95f;
         public float Buoyancy = 0.24f;
-        public float DynamicWindResponse = 2.1f;
+        public float DynamicWindResponse = 1.6f;
         public float TurbulenceStrength = 1.1f;
         public float TurbulenceFrequency = 0.055f;
 
@@ -100,18 +100,18 @@ namespace PersistentSRBSmoke
         public float PadCloudGlobalBias = 0.72f;
 
         // Continuous altitude-dependent wind. WindLayerHeight is now a broad vertical variation
-        // scale, not a hard layer boundary. WindSpread* controls the small horizontal eddies that
-        // make neighbouring cloudlets separate across the full ascent profile.
+        // scale, not a hard layer boundary. WindSpread* controls large weak horizontal eddies that
+        // fan out the plume without drawing the trail into a visible sine-wave pattern.
         public bool WindEnabled = true;
-        public float WindSpeed = 4.8f;
-        public float WindLayerHeight = 6500f;
+        public float WindSpeed = 4.4f;
+        public float WindLayerHeight = 9000f;
         public float WindTopAltitude = 32000f;
-        public float WindDirectionChangeRadians = 0.55f;
-        public float WindTimeScale = 0.00035f;
-        public float WindSpreadSpeed = 2.4f;
-        public float WindSpreadScale = 260f;
-        public float WindSpreadVerticalScale = 1100f;
-        public float WindSpreadTimeScale = 0.0020f;
+        public float WindDirectionChangeRadians = 0.30f;
+        public float WindTimeScale = 0.00012f;
+        public float WindSpreadSpeed = 1.0f;
+        public float WindSpreadScale = 850f;
+        public float WindSpreadVerticalScale = 2600f;
+        public float WindSpreadTimeScale = 0.00035f;
 
         public bool DebugLogging = false;
 
