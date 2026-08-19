@@ -60,7 +60,10 @@ namespace PersistentSRBSmoke
                     continue;
 
                 float age = Mathf.Clamp01(1f - p.remainingLifetime / p.startLifetime);
-                float size = p.startSize * EvaluateSizeGrowth(age);
+
+                // v0.4.2 deliberately renders the optical volume wider than the raw Shuriken size.
+                // Real SRB exhaust rapidly becomes a broad turbulent cloud, not a pencil-thin tube.
+                float size = p.startSize * EvaluateSizeGrowth(age) * 1.34f;
                 if (size <= 0.05f)
                     continue;
 
@@ -70,16 +73,21 @@ namespace PersistentSRBSmoke
                 if (color.a <= 0.002f)
                     continue;
 
-                // A small deterministic anisotropy breaks perfect spheres while retaining a stable
-                // world-space shape through time warp and camera motion.
                 float seed = HashToUnit(p.randomSeed);
-                float sx = 0.90f + seed * 0.22f;
-                float sy = 0.92f + Mathf.Repeat(seed * 7.13f, 1f) * 0.20f;
-                float sz = 0.90f + Mathf.Repeat(seed * 13.91f, 1f) * 0.24f;
+                float sx = 1.02f + seed * 0.24f;
+                float sy = 1.00f + Mathf.Repeat(seed * 7.13f, 1f) * 0.26f;
+                float sz = 1.02f + Mathf.Repeat(seed * 13.91f, 1f) * 0.30f;
+
+                // Random stable orientation matters because the raymarch density now contains
+                // asymmetric macro-lobes. Without rotation every cloudlet would repeat the same shape.
+                Quaternion rotation = Quaternion.Euler(
+                    Mathf.Repeat(seed * 733f, 1f) * 360f,
+                    Mathf.Repeat(seed * 1291f, 1f) * 360f,
+                    Mathf.Repeat(seed * 2053f, 1f) * 360f);
 
                 _matrices[batchCount] = Matrix4x4.TRS(
                     p.position,
-                    Quaternion.identity,
+                    rotation,
                     new Vector3(size * sx, size * sy, size * sz));
                 _colors[batchCount] = new Vector4(color.r, color.g, color.b, color.a);
                 _params[batchCount] = new Vector4(age, seed, size, 0f);
@@ -104,8 +112,6 @@ namespace PersistentSRBSmoke
             _properties.SetVectorArray("_SmokeColor", _colors);
             _properties.SetVectorArray("_SmokeParams", _params);
 
-            // The simple overload is intentionally used for KSP/Unity API compatibility. The
-            // material is transparent and has shadows disabled in the shader itself.
             Graphics.DrawMeshInstanced(
                 _proxyCube,
                 0,
@@ -118,26 +124,26 @@ namespace PersistentSRBSmoke
         private float EvaluateSizeGrowth(float age)
         {
             float g = Mathf.Max(1f, _settings.SizeGrowth);
-            if (age <= 0.04f)
-                return Mathf.Lerp(1.00f, 1.55f, Smooth01(age / 0.04f));
+            if (age <= 0.03f)
+                return Mathf.Lerp(1.00f, 1.72f, Smooth01(age / 0.03f));
             if (age <= 0.10f)
-                return Mathf.Lerp(1.55f, Mathf.Min(g, 3.4f), Smooth01((age - 0.04f) / 0.06f));
-            if (age <= 0.22f)
-                return Mathf.Lerp(Mathf.Min(g, 3.4f), Mathf.Min(g, 7.0f), Smooth01((age - 0.10f) / 0.12f));
-            if (age <= 0.45f)
-                return Mathf.Lerp(Mathf.Min(g, 7.0f), Mathf.Min(g, 12.0f), Smooth01((age - 0.22f) / 0.23f));
-            return Mathf.Lerp(Mathf.Min(g, 12.0f), g, Smooth01((age - 0.45f) / 0.55f));
+                return Mathf.Lerp(1.72f, Mathf.Min(g, 4.2f), Smooth01((age - 0.03f) / 0.07f));
+            if (age <= 0.24f)
+                return Mathf.Lerp(Mathf.Min(g, 4.2f), Mathf.Min(g, 8.8f), Smooth01((age - 0.10f) / 0.14f));
+            if (age <= 0.50f)
+                return Mathf.Lerp(Mathf.Min(g, 8.8f), Mathf.Min(g, 14.5f), Smooth01((age - 0.24f) / 0.26f));
+            return Mathf.Lerp(Mathf.Min(g, 14.5f), g, Smooth01((age - 0.50f) / 0.50f));
         }
 
         private static float EvaluateAlpha(float age)
         {
             if (age <= 0.08f)
-                return Mathf.Lerp(0.98f, 0.90f, Smooth01(age / 0.08f));
-            if (age <= 0.30f)
-                return Mathf.Lerp(0.90f, 0.74f, Smooth01((age - 0.08f) / 0.22f));
-            if (age <= 0.72f)
-                return Mathf.Lerp(0.74f, 0.48f, Smooth01((age - 0.30f) / 0.42f));
-            return Mathf.Lerp(0.48f, 0f, Smooth01((age - 0.72f) / 0.28f));
+                return Mathf.Lerp(1.00f, 0.94f, Smooth01(age / 0.08f));
+            if (age <= 0.32f)
+                return Mathf.Lerp(0.94f, 0.80f, Smooth01((age - 0.08f) / 0.24f));
+            if (age <= 0.74f)
+                return Mathf.Lerp(0.80f, 0.52f, Smooth01((age - 0.32f) / 0.42f));
+            return Mathf.Lerp(0.52f, 0f, Smooth01((age - 0.74f) / 0.26f));
         }
 
         private static float Smooth01(float t)
