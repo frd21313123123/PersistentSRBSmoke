@@ -10,13 +10,21 @@ namespace PersistentSRBSmoke
         private readonly GameObject _gameObject;
         private readonly ParticleSystem _system;
         private readonly ParticleSystem.Particle[] _particleBuffer;
-        private readonly Material _material;
         private readonly Texture2D _texture;
         private readonly Mesh _cloudletMesh;
         private readonly PadCloudDensityField _padCloud;
+        private readonly VolumetricSmokeShader _volumetricShader;
         private bool _floatingOriginRegistered;
 
         public int ParticleCount { get { return _system == null ? 0 : _system.particleCount; } }
+        public bool UsingCustomVolumetricShader
+        {
+            get { return _volumetricShader != null && _volumetricShader.UsingCustomShader; }
+        }
+        public bool SoftParticlesActive
+        {
+            get { return _volumetricShader != null && _volumetricShader.SoftParticlesActive; }
+        }
 
         public SmokeParticlePool(SmokeSettings settings)
         {
@@ -32,10 +40,10 @@ namespace PersistentSRBSmoke
 
             ParticleSystemRenderer renderer = _gameObject.GetComponent<ParticleSystemRenderer>();
             _texture = CreateSmokeTexture(160);
-            _material = CreateParticleMaterial(_texture);
+            _volumetricShader = new VolumetricSmokeShader(_texture, _settings);
             _cloudletMesh = CreateCloudletMesh();
 
-            renderer.material = _material;
+            renderer.material = _volumetricShader.Material;
             renderer.renderMode = ParticleSystemRenderMode.Mesh;
             renderer.mesh = _cloudletMesh;
             renderer.sortMode = ParticleSystemSortMode.Distance;
@@ -51,6 +59,18 @@ namespace PersistentSRBSmoke
             }
 
             _system.Play();
+        }
+
+        public void UpdateVolumetricLighting(
+            CelestialBody body,
+            Camera camera,
+            Vector3 samplePosition,
+            float atmosphericFactor)
+        {
+            if (_volumetricShader == null || !_settings.VolumetricLightingEnabled)
+                return;
+
+            _volumetricShader.UpdateFrame(body, camera, samplePosition, atmosphericFactor);
         }
 
         public void Emit(
@@ -402,28 +422,10 @@ namespace PersistentSRBSmoke
             return (value & 0x00FFFFFFU) / 16777215f;
         }
 
-        private static Material CreateParticleMaterial(Texture2D texture)
-        {
-            Shader shader = Shader.Find("KSP/Particles/Alpha Blended");
-            if (shader == null) shader = Shader.Find("Particles/Alpha Blended");
-            if (shader == null) shader = Shader.Find("Legacy Shaders/Particles/Alpha Blended");
-            if (shader == null) shader = Shader.Find("Unlit/Transparent");
-
-            if (shader == null)
-                throw new InvalidOperationException("No compatible transparent particle shader was found.");
-
-            Material material = new Material(shader);
-            material.name = "PersistentSRBSmoke.RuntimeMaterial";
-            material.mainTexture = texture;
-            if (material.HasProperty("_TintColor"))
-                material.SetColor("_TintColor", Color.white);
-            return material;
-        }
-
         private static Texture2D CreateSmokeTexture(int size)
         {
             Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false, true);
-            texture.name = "PersistentSRBSmoke.RuntimeTexture";
+            texture.name = "PersistentSRBSmoke.RuntimeDensityTexture";
             texture.wrapMode = TextureWrapMode.Clamp;
             texture.filterMode = FilterMode.Bilinear;
 
@@ -446,11 +448,15 @@ namespace PersistentSRBSmoke
                     float alpha = Mathf.Pow(radial, 0.64f) * Mathf.Lerp(0.36f, 1f, noise);
                     alpha = Mathf.Clamp01((alpha - 0.018f) * 1.16f);
 
+                    // RGB starts neutral. VolumetricSmokeShader dynamically relights it from this
+                    // preserved radial/noise density profile while alpha remains the optical density.
                     texture.SetPixel(x, y, new Color(1f, 1f, 1f, alpha));
                 }
             }
 
-            texture.Apply(false, true);
+            // Keep the texture CPU-readable: the fallback volumetric renderer updates RGB at a
+            // throttled rate according to sun/camera direction while preserving alpha density.
+            texture.Apply(false, false);
             return texture;
         }
 
@@ -463,8 +469,8 @@ namespace PersistentSRBSmoke
                 _floatingOriginRegistered = false;
             }
 
+            if (_volumetricShader != null) _volumetricShader.Dispose();
             if (_cloudletMesh != null) UnityEngine.Object.Destroy(_cloudletMesh);
-            if (_material != null) UnityEngine.Object.Destroy(_material);
             if (_texture != null) UnityEngine.Object.Destroy(_texture);
             if (_gameObject != null) UnityEngine.Object.Destroy(_gameObject);
         }
