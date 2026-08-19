@@ -63,7 +63,10 @@ namespace PersistentSRBSmoke
             if (!_settings.WindEnabled || body == null)
                 return Vector3.zero;
 
-            if (!_prepared || _preparedBody != body || System.Math.Abs(_preparedUniversalTime - universalTime) > 0.0001)
+            // Emission can ask for wind every FixedUpdate. Rebuild no faster than the configured
+            // dynamic-motion cadence; UpdateDynamicMotion explicitly calls Prepare at that cadence.
+            double cacheLifetime = 1.0 / System.Math.Max(1.0, _settings.DynamicMotionHz);
+            if (!_prepared || _preparedBody != body || System.Math.Abs(_preparedUniversalTime - universalTime) >= cacheLifetime)
                 Prepare(body, universalTime);
 
             if (!_prepared || _samples == null || _samples.Length == 0)
