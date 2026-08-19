@@ -18,6 +18,7 @@ namespace PersistentSRBSmoke
 
         private SmokeSettings _settings;
         private SmokeParticlePool _smoke;
+        private WindModel _wind;
         private readonly Dictionary<int, EngineEmitter> _emitters = new Dictionary<int, EngineEmitter>();
         private float _nextEngineScan;
         private float _nextDebugLog;
@@ -35,8 +36,9 @@ namespace PersistentSRBSmoke
             try
             {
                 _smoke = new SmokeParticlePool(_settings);
+                _wind = new WindModel(_settings);
                 ScanEngines();
-                Debug.Log("[PersistentSRBSmoke] MVP 0.1 initialized.");
+                Debug.Log("[PersistentSRBSmoke] v0.2 initialized with altitude wind shear.");
             }
             catch (Exception ex)
             {
@@ -115,14 +117,17 @@ namespace PersistentSRBSmoke
                 up = currentPosition.normalized;
             up.Normalize();
 
+            double universalTime = Planetarium.GetUniversalTime();
+            Vector3 wind = _wind == null ? Vector3.zero : _wind.GetWind(vessel, up, universalTime);
             float scale = Mathf.Lerp(0.72f, 1.25f, Mathf.Sqrt(thrustFactor));
+
             for (int i = 0; i < count; i++)
             {
                 float t = count == 1 ? 1f : (i + UnityEngine.Random.value) / count;
                 Vector3 point = Vector3.Lerp(previousPosition, currentPosition, Mathf.Clamp01(t));
                 float radialJitter = _settings.StartSize * 0.18f;
                 point += UnityEngine.Random.insideUnitSphere * radialJitter;
-                _smoke.Emit(point, up, atmosphere, scale);
+                _smoke.Emit(point, up, wind, atmosphere, scale);
             }
         }
 
@@ -245,6 +250,7 @@ namespace PersistentSRBSmoke
                 _smoke.Dispose();
                 _smoke = null;
             }
+            _wind = null;
             _emitters.Clear();
         }
     }
