@@ -68,6 +68,7 @@
   <ItemGroup>
     <Compile Include="PersistentSRBSmoke\PersistentSRBSmokeController.cs" />
     <Compile Include="PersistentSRBSmoke\NearNozzleSmokeLayer.cs" />
+    <Compile Include="PersistentSRBSmoke\SmokeShadowLayer.cs" />
     <Compile Include="PersistentSRBSmoke\Settings.cs" />
     <Compile Include="PersistentSRBSmoke\SmokeParticlePool.cs" />
     <Compile Include="PersistentSRBSmoke\PadCloudDensityField.cs" />
