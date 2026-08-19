@@ -69,6 +69,7 @@
     <Compile Include="PersistentSRBSmoke\PersistentSRBSmokeController.cs" />
     <Compile Include="PersistentSRBSmoke\Settings.cs" />
     <Compile Include="PersistentSRBSmoke\SmokeParticlePool.cs" />
+    <Compile Include="PersistentSRBSmoke\StockSmokeSuppressor.cs" />
     <Compile Include="PersistentSRBSmoke\WindModel.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
