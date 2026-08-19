@@ -1,51 +1,84 @@
 # Persistent SRB Smoke
 
-Первая рабочая реализация отдельного графического мода для **Kerbal Space Program 1.12.x**, создающего длинный сохраняющийся дымный след от твердотопливных ускорителей.
+Графический мод для **Kerbal Space Program 1.12.x**, создающий длинный сохраняющийся дымный след от твердотопливных ускорителей.
 
-## Уже реализовано
+## Что уже реализовано
 
 - Автоматический поиск `ModuleEngines` / `ModuleEnginesFX`, использующих `SolidFuel`.
 - Поддержка всех загруженных аппаратов, включая отделившиеся, но ещё горящие SRB.
-- Отдельные точки эмиссии для каждого `thrustTransform` двигателя.
-- World-space частицы: дым остаётся в том месте, где прошла ракета.
-- Регистрация ParticleSystem в KSP `FloatingOrigin`, чтобы длинный след корректно переживал сдвиг начала координат.
-- Заполнение следа по **пройденному расстоянию**, поэтому на большой скорости он не должен становиться пунктиром.
-- Время жизни по умолчанию 150 секунд.
-- Постепенное сильное расширение старых клубов дыма.
-- Плавное рассеивание/исчезновение.
-- Базовая турбулентность через Unity ParticleSystem Noise.
-- Небольшой боковой дрейф и подъём дыма.
-- Зависимость количества/прозрачности дыма от давления атмосферы.
-- В вакууме дым не создаётся.
-- Процедурная текстура дыма создаётся самим модом во время запуска — никаких ассетов другого мода не используется.
-- Совместимость по архитектуре с Waterfall: Waterfall рисует факел, этот мод — сохраняющийся дым.
+- Отдельная эмиссия из каждого `thrustTransform`.
+- World-space частицы с регистрацией в KSP `FloatingOrigin`.
+- Заполнение следа по пройденному расстоянию, чтобы на высокой скорости не появлялись большие разрывы.
+- Масштабирование количества, размера, времени жизни, прозрачности и расстояния между клубами в зависимости от тяги двигателя.
+- Синхронизация старения и движения дыма с KSP Universal Time при time warp.
+- Ветер с изменением направления и скорости по высоте.
+- Density-driven модель стартового облака: плотный дым растекается в стороны у площадки, внешние области получают подъём.
+- Подавление stock/legacy SRB smoke без отключения Waterfall и факела двигателя.
+- Процедурная текстура дыма, создаваемая во время запуска.
 
-## Пока не реализовано
+## Что изменено для производительности
 
-Следующие этапы:
+Текущий рендер всё ещё основан на Unity Shuriken, но самые дорогие места ограничены:
 
-1. Настоящие слои ветра по высоте и wind shear.
-2. Более сложная 3D-турбулентность старого дыма.
-3. Собственный depth-aware shader и освещение от Солнца/двигателей.
-4. Столкновение выхлопа с землёй и растекание облака по стартовой площадке.
-5. LOD: объединение старых далёких клубов для экономии FPS.
-6. Меню настроек прямо в игре.
-7. Пресеты Performance / Realistic / Cinematic / Shuttle.
-8. Поддержка нестандартных твёрдых топлив из модов через конфиг.
+- Perlin-шум ветра теперь вычисляется по сетке высот один раз за dynamic update, а не несколько раз для каждой частицы.
+- Старые частицы обновляют динамическую скорость реже свежих.
+- Далёкие частицы получают дополнительный LOD по частоте обновления.
+- Между такими обновлениями Unity продолжает двигать частицы по уже рассчитанной скорости.
+- Один cloudlet по умолчанию состоит из 3 пересекающихся прозрачных quad вместо прежних 6.
+- Сортировка десятков тысяч прозрачных частиц по расстоянию выключена по умолчанию.
+- Убраны лишние временные коллекции при периодическом поиске двигателей.
+- Поиск stock-smoke компонентов кэшируется, а тяжёлый reflection reset больше не выполняется каждый кадр.
+
+Сбалансированные значения по умолчанию: `maxParticles = 36000` и `dynamicMotionHz = 6`.
+
+## Ограничение текущего рендера
+
+Это пока **не настоящий volumetric smoke**. Каждый клуб остаётся небольшим mesh из пересекающихся прозрачных плоскостей с alpha-текстурой. Поэтому при очень плотном следе GPU всё ещё может упираться в transparent overdraw.
+
+Следующий крупный этап — chunked volumetric renderer с density volume, raymarching, Beer-Lambert extinction, фазовой функцией рассеяния, self-shadowing, depth-aware смешиванием и temporal accumulation. План находится в [`docs/VOLUMETRIC_ROADMAP.md`](docs/VOLUMETRIC_ROADMAP.md).
 
 ## Установка
 
-1. Скачайте архив `PersistentSRBSmoke-v*.zip` со страницы [Releases](https://github.com/frd21313123123/PersistentSRBSmoke/releases).
-2. Распакуйте архив в корневую папку Kerbal Space Program (или перенесите папку `PersistentSRBSmoke` в вашу папку `GameData/`).
-3. Итоговый путь к моду должен выглядеть как `<KSP_DIR>/GameData/PersistentSRBSmoke/`.
+1. Скачай `PersistentSRBSmoke-v*.zip` со страницы Releases.
+2. Распакуй архив в корневую папку Kerbal Space Program или перенеси папку `PersistentSRBSmoke` в `GameData/`.
+3. Итоговый путь должен быть `<KSP_DIR>/GameData/PersistentSRBSmoke/`.
+
+## Настройки
+
+Файл:
+
+```text
+GameData/PersistentSRBSmoke/PluginData/Settings.cfg
+```
+
+Основные параметры производительности:
+
+```cfg
+maxParticles = 36000
+dynamicMotionHz = 6
+engineScanInterval = 2
+cloudletPlanes = 3
+sortParticles = false
+
+dynamicMidAge = 0.20
+dynamicOldAge = 0.55
+dynamicMidStride = 2
+dynamicOldStride = 4
+dynamicFarDistance = 5000
+dynamicFarStrideMultiplier = 2
+
+windCacheLayers = 96
+```
+
+Если FPS проседает, сначала уменьшай `maxParticles`, `lifetime`, `particlesPerMeter` и `dynamicMotionHz`. Если упор именно в GPU, оставляй `cloudletPlanes = 3` и `sortParticles = false`.
 
 ## Сборка DLL
 
 Нужны:
 
-- установленный KSP 1.12.x;
+- KSP 1.12.x;
 - Visual Studio 2022;
-- workload **.NET desktop development**;
+- workload `.NET desktop development`;
 - переменная окружения `KSP_DIR`, указывающая на папку KSP.
 
 Пример Steam:
@@ -55,65 +88,22 @@ set KSP_DIR=C:\Program Files (x86)\Steam\steamapps\common\Kerbal Space Program
 build.bat
 ```
 
-Проект берёт KSP/Unity DLL из:
+Проект берёт настоящие KSP/Unity DLL из:
 
 ```text
 %KSP_DIR%\KSP_x64_Data\Managed
 ```
 
-После успешной сборки `PersistentSRBSmoke.dll` автоматически копируется в:
+После сборки DLL копируется в:
 
 ```text
-%KSP_DIR%\GameData\PersistentSRBSmoke\Plugins\
+%KSP_DIR%\GameData\PersistentSRBSmoke\Plugins\PersistentSRBSmoke.dll
 ```
 
-Также скопируй папку:
+Не забудь также скопировать папку `GameData/PersistentSRBSmoke`, чтобы присутствовал `PluginData/Settings.cfg`.
 
-```text
-GameData\PersistentSRBSmoke
-```
+## GitHub Actions
 
-из проекта в `GameData` игры.
+Workflow `.github/workflows/build.yml` собирает DLL и установочный ZIP при push в `main`, pull request и ручном запуске. GitHub Release создаётся только для тега `v*` либо при ручном запуске с явно включённым `create_release`.
 
-## Настройка эффекта
-
-Файл:
-
-```text
-GameData/PersistentSRBSmoke/PluginData/Settings.cfg
-```
-
-Основные параметры:
-
-```cfg
-lifetime = 150
-baseEmissionRate = 24
-particlesPerMeter = 0.22
-startSize = 2.8
-sizeGrowth = 9.0
-opacity = 0.72
-turbulenceStrength = 0.65
-maxParticles = 16000
-```
-
-Для более массивного Shuttle-подобного следа можно попробовать:
-
-```cfg
-lifetime = 180
-baseEmissionRate = 30
-particlesPerMeter = 0.28
-startSize = 3.2
-sizeGrowth = 10.5
-opacity = 0.76
-turbulenceStrength = 0.8
-maxParticles = 24000
-```
-
-Если FPS проседает, в первую очередь уменьшай `maxParticles`, `lifetime` и `particlesPerMeter`.
-
-
-## Автосборка GitHub Actions
-
-Workflow `.github/workflows/build.yml` автоматически собирает DLL и установочный ZIP при push в `main`, pull request и ручном запуске. При создании тега вида `v0.1.0` workflow также создаёт GitHub Release и прикладывает ZIP.
-
-Для CI используются публичные skeleton-сборки KSP 1.11.2 только как compile-time references; они не попадают в архив мода. Локальная сборка с `KSP_DIR` по-прежнему использует настоящие DLL установленного KSP 1.12.x.
+Для CI используются публичные skeleton-сборки KSP 1.11.2 только как compile-time references; в архив мода они не попадают. Локальная сборка с `KSP_DIR` продолжает использовать настоящие DLL KSP 1.12.x.
