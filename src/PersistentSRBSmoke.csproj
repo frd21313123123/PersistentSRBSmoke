@@ -13,7 +13,6 @@
     <LangVersion>7.2</LangVersion>
     <FileAlignment>512</FileAlignment>
     <KSPManagedDir Condition=" '$(KSP_DIR)' != '' ">$(KSP_DIR)\KSP_x64_Data\Managed</KSPManagedDir>
-    <!-- CI builds do not redistribute KSP DLLs. They compile against public skeleton references. -->
     <UseKspSkeletons Condition=" '$(UseKspSkeletons)' == '' And '$(KSP_DIR)' == '' ">true</UseKspSkeletons>
     <UseKspSkeletons Condition=" '$(UseKspSkeletons)' == '' ">false</UseKspSkeletons>
   </PropertyGroup>
@@ -41,22 +40,10 @@
   </ItemGroup>
 
   <ItemGroup Condition=" '$(UseKspSkeletons)' != 'true' ">
-    <Reference Include="Assembly-CSharp">
-      <HintPath>$(KSPManagedDir)\Assembly-CSharp.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine">
-      <HintPath>$(KSPManagedDir)\UnityEngine.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.CoreModule">
-      <HintPath>$(KSPManagedDir)\UnityEngine.CoreModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="UnityEngine.ParticleSystemModule">
-      <HintPath>$(KSPManagedDir)\UnityEngine.ParticleSystemModule.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
+    <Reference Include="Assembly-CSharp"><HintPath>$(KSPManagedDir)\Assembly-CSharp.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="UnityEngine"><HintPath>$(KSPManagedDir)\UnityEngine.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(KSPManagedDir)\UnityEngine.CoreModule.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="UnityEngine.ParticleSystemModule"><HintPath>$(KSPManagedDir)\UnityEngine.ParticleSystemModule.dll</HintPath><Private>False</Private></Reference>
   </ItemGroup>
 
   <ItemGroup Condition=" '$(UseKspSkeletons)' == 'true' ">
@@ -71,6 +58,8 @@
     <Compile Include="PersistentSRBSmoke\SmokeParticlePool.cs" />
     <Compile Include="PersistentSRBSmoke\VolumetricLightingModel.cs" />
     <Compile Include="PersistentSRBSmoke\VolumetricSmokeShader.cs" />
+    <Compile Include="PersistentSRBSmoke\VolumetricCloudletMesh.cs" />
+    <Compile Include="PersistentSRBSmoke\RaymarchedSmokeRenderer.cs" />
     <Compile Include="PersistentSRBSmoke\PadCloudDensityField.cs" />
     <Compile Include="PersistentSRBSmoke\StockSmokeSuppressor.cs" />
     <Compile Include="PersistentSRBSmoke\WindModel.cs" />
