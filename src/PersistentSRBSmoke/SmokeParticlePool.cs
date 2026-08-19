@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace PersistentSRBSmoke
@@ -11,6 +12,7 @@ namespace PersistentSRBSmoke
         private readonly ParticleSystem.Particle[] _particleBuffer;
         private readonly Material _material;
         private readonly Texture2D _texture;
+        private readonly Mesh _cloudletMesh;
         private bool _floatingOriginRegistered;
 
         public int ParticleCount { get { return _system == null ? 0 : _system.particleCount; } }
@@ -29,8 +31,11 @@ namespace PersistentSRBSmoke
             ParticleSystemRenderer renderer = _gameObject.GetComponent<ParticleSystemRenderer>();
             _texture = CreateSmokeTexture(160);
             _material = CreateParticleMaterial(_texture);
+            _cloudletMesh = CreateCloudletMesh();
+
             renderer.material = _material;
-            renderer.renderMode = ParticleSystemRenderMode.Billboard;
+            renderer.renderMode = ParticleSystemRenderMode.Mesh;
+            renderer.mesh = _cloudletMesh;
             renderer.sortMode = ParticleSystemSortMode.Distance;
 
             try
@@ -70,7 +75,11 @@ namespace PersistentSRBSmoke
                 new Color(0.54f, 0.52f, 0.49f, 1f),
                 new Color(0.95f, 0.94f, 0.91f, 1f),
                 UnityEngine.Random.value);
-            smokeColor.a = Mathf.Clamp01(_settings.Opacity * opacityFactor * UnityEngine.Random.Range(0.88f, 1.08f));
+
+            // A cloudlet is made from several intersecting translucent slices. Each individual
+            // slice therefore needs less alpha than the previous single-billboard renderer.
+            smokeColor.a = Mathf.Clamp01(
+                _settings.Opacity * 0.48f * opacityFactor * UnityEngine.Random.Range(0.88f, 1.08f));
 
             // Lower ambient pressure gives the fresh exhaust room to expand more aggressively.
             float altitudeExpansion = Mathf.Lerp(
@@ -216,6 +225,64 @@ namespace PersistentSRBSmoke
             noise.octaveCount = 2;
         }
 
+        // True EVE volumetrics use a ray-marched density field, but the Release 5 package is
+        // All Rights Reserved. This mesh is an original runtime-generated volumetric impostor:
+        // six differently oriented density slices intersect to form one cloudlet. It retains the
+        // current lightweight particle pipeline while giving the smoke depth from arbitrary views.
+        private static Mesh CreateCloudletMesh()
+        {
+            Vector3[] normals =
+            {
+                Vector3.right,
+                Vector3.up,
+                Vector3.forward,
+                new Vector3(1f, 1f, 1f).normalized,
+                new Vector3(-1f, 1f, 1f).normalized,
+                new Vector3(1f, -1f, 1f).normalized
+            };
+
+            var vertices = new List<Vector3>(normals.Length * 4);
+            var uvs = new List<Vector2>(normals.Length * 4);
+            var triangles = new List<int>(normals.Length * 6);
+
+            for (int i = 0; i < normals.Length; i++)
+            {
+                Vector3 normal = normals[i];
+                Vector3 reference = Mathf.Abs(Vector3.Dot(normal, Vector3.up)) > 0.88f
+                    ? Vector3.right
+                    : Vector3.up;
+
+                Vector3 axisA = Vector3.Cross(normal, reference).normalized * 0.5f;
+                Vector3 axisB = Vector3.Cross(normal, axisA).normalized * 0.5f;
+
+                int baseIndex = vertices.Count;
+                vertices.Add(-axisA - axisB);
+                vertices.Add(axisA - axisB);
+                vertices.Add(axisA + axisB);
+                vertices.Add(-axisA + axisB);
+
+                uvs.Add(new Vector2(0f, 0f));
+                uvs.Add(new Vector2(1f, 0f));
+                uvs.Add(new Vector2(1f, 1f));
+                uvs.Add(new Vector2(0f, 1f));
+
+                triangles.Add(baseIndex + 0);
+                triangles.Add(baseIndex + 1);
+                triangles.Add(baseIndex + 2);
+                triangles.Add(baseIndex + 0);
+                triangles.Add(baseIndex + 2);
+                triangles.Add(baseIndex + 3);
+            }
+
+            Mesh mesh = new Mesh();
+            mesh.name = "PersistentSRBSmoke.RuntimeCloudlet";
+            mesh.SetVertices(vertices);
+            mesh.SetUVs(0, uvs);
+            mesh.SetTriangles(triangles, 0);
+            mesh.RecalculateBounds();
+            return mesh;
+        }
+
         private static float HashToUnit(uint value)
         {
             value ^= value >> 17;
@@ -287,6 +354,7 @@ namespace PersistentSRBSmoke
                 _floatingOriginRegistered = false;
             }
 
+            if (_cloudletMesh != null) UnityEngine.Object.Destroy(_cloudletMesh);
             if (_material != null) UnityEngine.Object.Destroy(_material);
             if (_texture != null) UnityEngine.Object.Destroy(_texture);
             if (_gameObject != null) UnityEngine.Object.Destroy(_gameObject);
