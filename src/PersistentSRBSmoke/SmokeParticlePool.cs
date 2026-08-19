@@ -43,7 +43,7 @@ namespace PersistentSRBSmoke
             _system.Play();
         }
 
-        public void Emit(Vector3 position, Vector3 up, float atmosphericFactor, float scale)
+        public void Emit(Vector3 position, Vector3 up, Vector3 wind, float atmosphericFactor, float scale)
         {
             if (_system == null || atmosphericFactor <= 0f)
                 return;
@@ -57,7 +57,7 @@ namespace PersistentSRBSmoke
             float angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
             float drift = UnityEngine.Random.Range(0.25f, 1f) * _settings.DriftSpeed;
             Vector3 sideways = (tangentA * Mathf.Cos(angle) + tangentB * Mathf.Sin(angle)) * drift;
-            Vector3 velocity = sideways + up * _settings.Buoyancy;
+            Vector3 velocity = wind + sideways + up * _settings.Buoyancy;
 
             Color smokeColor = Color.Lerp(new Color(0.52f, 0.50f, 0.47f, 1f), new Color(0.88f, 0.87f, 0.84f, 1f), UnityEngine.Random.value);
             smokeColor.a = Mathf.Clamp01(_settings.Opacity * atmosphericFactor * UnityEngine.Random.Range(0.82f, 1.08f));
