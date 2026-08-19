@@ -4,6 +4,102 @@ using UnityEngine;
 
 namespace PersistentSRBSmoke
 {
+    internal struct EngineSmokeProfile
+    {
+        public float Strength;
+        public float EmissionMultiplier;
+        public float SizeMultiplier;
+        public float LifetimeMultiplier;
+        public float OpacityMultiplier;
+        public float SpacingMultiplier;
+        public Color BaseColor;
+
+        public static EngineSmokeProfile Create(ModuleEngines engine, SmokeSettings settings, float emitterShare)
+        {
+            emitterShare = Mathf.Clamp(emitterShare, 0.05f, 1f);
+
+            float strength = 1f;
+            if (settings.EngineScalingEnabled && engine != null)
+            {
+                float thrust = Mathf.Max(0.1f, engine.maxThrust);
+                float minLog = Mathf.Log10(Mathf.Max(0.1f, settings.EngineMinThrust));
+                float maxLog = Mathf.Log10(Mathf.Max(settings.EngineMinThrust + 0.1f, settings.EngineMaxThrust));
+                float thrustLog = Mathf.Log10(thrust);
+                strength = Mathf.Clamp01(Mathf.InverseLerp(minLog, maxLog, thrustLog));
+            }
+
+            float curve = Mathf.SmoothStep(0f, 1f, strength);
+
+            float emission = settings.EngineScalingEnabled
+                ? Mathf.Lerp(settings.SmallEngineEmissionMultiplier, settings.LargeEngineEmissionMultiplier, curve)
+                : 1f;
+            float size = settings.EngineScalingEnabled
+                ? Mathf.Lerp(settings.SmallEngineSizeMultiplier, settings.LargeEngineSizeMultiplier, curve)
+                : 1f;
+            float lifetime = settings.EngineScalingEnabled
+                ? Mathf.Lerp(settings.SmallEngineLifetimeMultiplier, settings.LargeEngineLifetimeMultiplier, curve)
+                : 1f;
+            float opacity = settings.EngineScalingEnabled
+                ? Mathf.Lerp(settings.SmallEngineOpacityMultiplier, settings.LargeEngineOpacityMultiplier, curve)
+                : 1f;
+            float spacing = settings.EngineScalingEnabled
+                ? Mathf.Lerp(settings.SmallEngineSpacingMultiplier, settings.LargeEngineSpacingMultiplier, curve)
+                : 1f;
+
+            // When one engine exposes several thrust transforms, share the particle budget between
+            // them instead of treating every nozzle as a complete independent SRB.
+            emission *= emitterShare;
+            spacing *= Mathf.Sqrt(1f / emitterShare);
+
+            // Small separation motors are intentionally darker and a little warmer. Large boosters
+            // remain neutral grey, but the whole palette is darker than v0.3.
+            Color smallColor = new Color(0.36f, 0.33f, 0.30f, 1f);
+            Color largeColor = new Color(0.56f, 0.55f, 0.53f, 1f);
+            Color baseColor = Color.Lerp(smallColor, largeColor, curve);
+
+            string engineName = engine != null && engine.part != null ? engine.part.name : string.Empty;
+            float variation = (StableHashToUnit(engineName) * 2f - 1f) * settings.EngineColorVariation;
+            baseColor.r *= 1f + variation;
+            baseColor.g *= 1f + variation * 0.20f;
+            baseColor.b *= 1f - variation * 0.85f;
+
+            float brightness = settings.SmokeBrightness;
+            baseColor.r = Mathf.Clamp01(baseColor.r * brightness);
+            baseColor.g = Mathf.Clamp01(baseColor.g * brightness);
+            baseColor.b = Mathf.Clamp01(baseColor.b * brightness);
+            baseColor.a = 1f;
+
+            return new EngineSmokeProfile
+            {
+                Strength = strength,
+                EmissionMultiplier = Mathf.Max(0.01f, emission),
+                SizeMultiplier = Mathf.Max(0.05f, size),
+                LifetimeMultiplier = Mathf.Max(0.05f, lifetime),
+                OpacityMultiplier = Mathf.Max(0.05f, opacity),
+                SpacingMultiplier = Mathf.Max(0.20f, spacing),
+                BaseColor = baseColor
+            };
+        }
+
+        private static float StableHashToUnit(string text)
+        {
+            unchecked
+            {
+                uint hash = 2166136261U;
+                if (!string.IsNullOrEmpty(text))
+                {
+                    for (int i = 0; i < text.Length; i++)
+                    {
+                        hash ^= text[i];
+                        hash *= 16777619U;
+                    }
+                }
+
+                return (hash & 0x00FFFFFFU) / 16777215f;
+            }
+        }
+    }
+
     [KSPAddon(KSPAddon.Startup.Flight, false)]
     public sealed class PersistentSRBSmokeController : MonoBehaviour
     {
@@ -14,6 +110,7 @@ namespace PersistentSRBSmoke
             public Vector3 LastPosition;
             public bool HasLastPosition;
             public float EmissionAccumulator;
+            public EngineSmokeProfile Profile;
         }
 
         private SmokeSettings _settings;
@@ -41,7 +138,7 @@ namespace PersistentSRBSmoke
                 _wind = new WindModel(_settings);
                 ScanEngines();
                 _lastDynamicMotion = Time.realtimeSinceStartup;
-                Debug.Log("[PersistentSRBSmoke] v0.3 initialized with expanding, dynamically advected smoke.");
+                Debug.Log("[PersistentSRBSmoke] v0.3.1 initialized with engine-specific smoke profiles.");
             }
             catch (Exception ex)
             {
@@ -67,9 +164,6 @@ namespace PersistentSRBSmoke
             foreach (EngineEmitter emitter in _emitters.Values)
                 UpdateEmitter(emitter, dt);
 
-            // The old implementation only assigned wind when a particle was born. Updating the
-            // living cloud at a lower, configurable rate lets old parts of the trail keep drifting,
-            // shearing and spreading without doing tens of thousands of particle updates every frame.
             float dynamicInterval = 1f / Mathf.Max(1f, _settings.DynamicMotionHz);
             if (now >= _nextDynamicMotion)
             {
@@ -130,19 +224,21 @@ namespace PersistentSRBSmoke
                 return;
 
             float thrustFactor = GetThrustFactor(engine);
+            EngineSmokeProfile profile = emitter.Profile;
 
-            // SRB exhaust is its own mass of hot gas and solids. In thin atmosphere we reduce the
-            // density somewhat, but never as aggressively as the old pressure-proportional model.
-            float desired = (_settings.BaseEmissionRate * dt + travel * _settings.ParticlesPerMeter) * thrustFactor * atmosphere;
+            float desired = (_settings.BaseEmissionRate * dt + travel * _settings.ParticlesPerMeter)
+                * thrustFactor
+                * atmosphere
+                * profile.EmissionMultiplier;
             emitter.EmissionAccumulator += desired;
             int accumulatedCount = Mathf.FloorToInt(emitter.EmissionAccumulator);
 
-            // Guarantee longitudinal overlap. High-altitude spacing is allowed to relax only a
-            // little; it no longer grows by ~60%, which was still visible as gaps at high speed.
-            float effectiveSpacing = _settings.MaxParticleSpacing * Mathf.Lerp(
-                _settings.HighAltitudeSpacingMultiplier,
-                1.0f,
-                atmosphere);
+            // The continuity budget now scales with engine size too. A tiny separation motor is
+            // allowed a much larger spacing than a Shuttle-class SRB, so it no longer paints the
+            // same huge persistent tube along the trajectory.
+            float effectiveSpacing = _settings.MaxParticleSpacing
+                * Mathf.Lerp(_settings.HighAltitudeSpacingMultiplier, 1.0f, atmosphere)
+                * profile.SpacingMultiplier;
             int spacingCount = travel > 0.001f
                 ? Mathf.CeilToInt(travel / Mathf.Max(0.25f, effectiveSpacing))
                 : 0;
@@ -177,19 +273,16 @@ namespace PersistentSRBSmoke
 
             for (int i = 0; i < count; i++)
             {
-                // Stratified placement keeps the trail continuous even when a physics frame covers
-                // a large distance. A small jitter avoids a visibly mathematical bead pattern.
                 float slotJitter = UnityEngine.Random.Range(-0.12f, 0.12f);
                 float t = count == 1 ? 1f : ((i + 0.5f + slotJitter) / count);
                 Vector3 point = Vector3.Lerp(previousPosition, currentPosition, Mathf.Clamp01(t));
 
-                // Jitter only across the trail, never along it.
-                float radialJitter = _settings.StartSize * scale * 0.12f;
+                float radialJitter = _settings.StartSize * scale * profile.SizeMultiplier * 0.12f;
                 float angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
                 float radius = Mathf.Sqrt(UnityEngine.Random.value) * radialJitter;
                 point += tangentA * (Mathf.Cos(angle) * radius) + tangentB * (Mathf.Sin(angle) * radius);
 
-                _smoke.Emit(point, up, wind, atmosphere, scale);
+                _smoke.Emit(point, up, wind, atmosphere, scale, profile);
             }
         }
 
@@ -221,12 +314,13 @@ namespace PersistentSRBSmoke
 
                         if (engine.thrustTransforms != null && engine.thrustTransforms.Count > 0)
                         {
+                            float share = 1f / engine.thrustTransforms.Count;
                             for (int t = 0; t < engine.thrustTransforms.Count; t++)
-                                RegisterEmitter(engine, engine.thrustTransforms[t], seen);
+                                RegisterEmitter(engine, engine.thrustTransforms[t], seen, share);
                         }
                         else
                         {
-                            RegisterEmitter(engine, part.transform, seen);
+                            RegisterEmitter(engine, part.transform, seen, 1f);
                         }
                     }
                 }
@@ -246,7 +340,7 @@ namespace PersistentSRBSmoke
                 _emitters.Remove(toRemove[i]);
         }
 
-        private void RegisterEmitter(ModuleEngines engine, Transform transform, HashSet<int> seen)
+        private void RegisterEmitter(ModuleEngines engine, Transform transform, HashSet<int> seen, float emitterShare)
         {
             if (transform == null)
                 return;
@@ -256,14 +350,29 @@ namespace PersistentSRBSmoke
             if (_emitters.ContainsKey(key))
                 return;
 
+            EngineSmokeProfile profile = EngineSmokeProfile.Create(engine, _settings, emitterShare);
             _emitters.Add(key, new EngineEmitter
             {
                 Engine = engine,
                 Transform = transform,
                 LastPosition = transform.position,
                 HasLastPosition = true,
-                EmissionAccumulator = 0f
+                EmissionAccumulator = 0f,
+                Profile = profile
             });
+
+            if (_settings.DebugLogging)
+            {
+                string partName = engine != null && engine.part != null ? engine.part.name : "unknown";
+                float thrust = engine == null ? 0f : engine.maxThrust;
+                Debug.Log(
+                    "[PersistentSRBSmoke] profile part=" + partName +
+                    " thrust=" + thrust.ToString("F1") + "kN" +
+                    " strength=" + profile.Strength.ToString("F2") +
+                    " emission=" + profile.EmissionMultiplier.ToString("F2") +
+                    " size=" + profile.SizeMultiplier.ToString("F2") +
+                    " lifetime=" + profile.LifetimeMultiplier.ToString("F2"));
+            }
         }
 
         private static bool UsesSolidFuel(ModuleEngines engine)
