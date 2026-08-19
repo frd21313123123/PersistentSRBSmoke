@@ -27,6 +27,23 @@ namespace PersistentSRBSmoke
         public float SizeGrowth = 18.0f;
         public float HighAltitudeSizeMultiplier = 1.85f;
         public float Opacity = 0.80f;
+        public float SmokeBrightness = 0.78f;
+        public float EngineColorVariation = 0.08f;
+
+        // Engine-dependent smoke scaling. KSP engine thrust is measured in kN.
+        public bool EngineScalingEnabled = true;
+        public float EngineMinThrust = 8f;
+        public float EngineMaxThrust = 800f;
+        public float SmallEngineEmissionMultiplier = 0.18f;
+        public float LargeEngineEmissionMultiplier = 1.10f;
+        public float SmallEngineSizeMultiplier = 0.38f;
+        public float LargeEngineSizeMultiplier = 1.10f;
+        public float SmallEngineLifetimeMultiplier = 0.45f;
+        public float LargeEngineLifetimeMultiplier = 1.00f;
+        public float SmallEngineOpacityMultiplier = 0.72f;
+        public float LargeEngineOpacityMultiplier = 1.00f;
+        public float SmallEngineSpacingMultiplier = 2.40f;
+        public float LargeEngineSpacingMultiplier = 0.95f;
 
         // Local cloud motion / diffusion
         public float DriftSpeed = 1.8f;
@@ -79,6 +96,22 @@ namespace PersistentSRBSmoke
                 settings.SizeGrowth = ReadFloat(node, "sizeGrowth", settings.SizeGrowth, 1f, 40f);
                 settings.HighAltitudeSizeMultiplier = ReadFloat(node, "highAltitudeSizeMultiplier", settings.HighAltitudeSizeMultiplier, 1f, 5f);
                 settings.Opacity = ReadFloat(node, "opacity", settings.Opacity, 0.01f, 1f);
+                settings.SmokeBrightness = ReadFloat(node, "smokeBrightness", settings.SmokeBrightness, 0.2f, 1.4f);
+                settings.EngineColorVariation = ReadFloat(node, "engineColorVariation", settings.EngineColorVariation, 0f, 0.3f);
+
+                settings.EngineScalingEnabled = ReadBool(node, "engineScalingEnabled", settings.EngineScalingEnabled);
+                settings.EngineMinThrust = ReadFloat(node, "engineMinThrust", settings.EngineMinThrust, 0.1f, 5000f);
+                settings.EngineMaxThrust = ReadFloat(node, "engineMaxThrust", settings.EngineMaxThrust, 0.2f, 20000f);
+                settings.SmallEngineEmissionMultiplier = ReadFloat(node, "smallEngineEmissionMultiplier", settings.SmallEngineEmissionMultiplier, 0.01f, 3f);
+                settings.LargeEngineEmissionMultiplier = ReadFloat(node, "largeEngineEmissionMultiplier", settings.LargeEngineEmissionMultiplier, 0.01f, 3f);
+                settings.SmallEngineSizeMultiplier = ReadFloat(node, "smallEngineSizeMultiplier", settings.SmallEngineSizeMultiplier, 0.05f, 3f);
+                settings.LargeEngineSizeMultiplier = ReadFloat(node, "largeEngineSizeMultiplier", settings.LargeEngineSizeMultiplier, 0.05f, 3f);
+                settings.SmallEngineLifetimeMultiplier = ReadFloat(node, "smallEngineLifetimeMultiplier", settings.SmallEngineLifetimeMultiplier, 0.05f, 2f);
+                settings.LargeEngineLifetimeMultiplier = ReadFloat(node, "largeEngineLifetimeMultiplier", settings.LargeEngineLifetimeMultiplier, 0.05f, 2f);
+                settings.SmallEngineOpacityMultiplier = ReadFloat(node, "smallEngineOpacityMultiplier", settings.SmallEngineOpacityMultiplier, 0.05f, 2f);
+                settings.LargeEngineOpacityMultiplier = ReadFloat(node, "largeEngineOpacityMultiplier", settings.LargeEngineOpacityMultiplier, 0.05f, 2f);
+                settings.SmallEngineSpacingMultiplier = ReadFloat(node, "smallEngineSpacingMultiplier", settings.SmallEngineSpacingMultiplier, 0.2f, 10f);
+                settings.LargeEngineSpacingMultiplier = ReadFloat(node, "largeEngineSpacingMultiplier", settings.LargeEngineSpacingMultiplier, 0.2f, 10f);
 
                 settings.DriftSpeed = ReadFloat(node, "driftSpeed", settings.DriftSpeed, 0f, 20f);
                 settings.DiffusionSpeed = ReadFloat(node, "diffusionSpeed", settings.DiffusionSpeed, 0f, 30f);
@@ -101,6 +134,9 @@ namespace PersistentSRBSmoke
             {
                 Debug.LogError("[PersistentSRBSmoke] Failed to load settings: " + ex);
             }
+
+            if (settings.EngineMaxThrust <= settings.EngineMinThrust)
+                settings.EngineMaxThrust = settings.EngineMinThrust + 1f;
 
             return settings;
         }
