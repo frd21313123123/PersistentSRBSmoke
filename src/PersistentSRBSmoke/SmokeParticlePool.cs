@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace PersistentSRBSmoke
@@ -9,17 +8,19 @@ namespace PersistentSRBSmoke
         private readonly SmokeSettings _settings;
         private readonly GameObject _gameObject;
         private readonly ParticleSystem _system;
+        private readonly ParticleSystemRenderer _renderer;
         private readonly ParticleSystem.Particle[] _particleBuffer;
         private readonly Texture2D _texture;
         private readonly Mesh _cloudletMesh;
         private readonly PadCloudDensityField _padCloud;
         private readonly VolumetricSmokeShader _volumetricShader;
+        private readonly RaymarchedSmokeRenderer _raymarchRenderer;
         private bool _floatingOriginRegistered;
 
         public int ParticleCount { get { return _system == null ? 0 : _system.particleCount; } }
         public bool UsingCustomVolumetricShader
         {
-            get { return _volumetricShader != null && _volumetricShader.UsingCustomShader; }
+            get { return _raymarchRenderer != null && _raymarchRenderer.Active; }
         }
         public bool SoftParticlesActive
         {
@@ -38,15 +39,28 @@ namespace PersistentSRBSmoke
             _system = _gameObject.AddComponent<ParticleSystem>();
             ConfigureParticleSystem(_system);
 
-            ParticleSystemRenderer renderer = _gameObject.GetComponent<ParticleSystemRenderer>();
-            _texture = CreateSmokeTexture(160);
+            _renderer = _gameObject.GetComponent<ParticleSystemRenderer>();
+            _texture = CreateSmokeTexture(160, _settings.NativeVolumeSliceOpacity);
             _volumetricShader = new VolumetricSmokeShader(_texture, _settings);
-            _cloudletMesh = CreateCloudletMesh();
+            _cloudletMesh = VolumetricCloudletMesh.CreateSliceVolume(_settings.NativeVolumeSlicesPerAxis);
 
-            renderer.material = _volumetricShader.Material;
-            renderer.renderMode = ParticleSystemRenderMode.Mesh;
-            renderer.mesh = _cloudletMesh;
-            renderer.sortMode = ParticleSystemSortMode.Distance;
+            _renderer.material = _volumetricShader.Material;
+            _renderer.renderMode = ParticleSystemRenderMode.Mesh;
+            _renderer.mesh = _cloudletMesh;
+            _renderer.sortMode = ParticleSystemSortMode.Distance;
+
+            if (_settings.RaymarchedVolumetricEnabled && _volumetricShader.RaymarchMaterial != null)
+            {
+                _raymarchRenderer = new RaymarchedSmokeRenderer(
+                    _system,
+                    _volumetricShader.RaymarchMaterial,
+                    _settings);
+
+                // Shuriken continues simulating all particles, but its visual renderer is disabled.
+                // RaymarchedSmokeRenderer reads the same particle state and renders true 3D density.
+                if (_raymarchRenderer.Active)
+                    _renderer.enabled = false;
+            }
 
             try
             {
@@ -71,6 +85,8 @@ namespace PersistentSRBSmoke
                 return;
 
             _volumetricShader.UpdateFrame(body, camera, samplePosition, atmosphericFactor);
+            if (_raymarchRenderer != null && _raymarchRenderer.Active)
+                _raymarchRenderer.Render(camera);
         }
 
         public void Emit(
@@ -98,9 +114,6 @@ namespace PersistentSRBSmoke
                 * smallEngineScatter;
             Vector3 sideways = (tangentA * Mathf.Cos(angle) + tangentB * Mathf.Sin(angle)) * drift;
 
-            // Around the launch pad the whole cloud should not simply translate with the wind.
-            // Ordinary wind/diffusion remain weak here; PadCloudDensityField supplies a separate
-            // density-driven pressure flow once enough exhaust has accumulated in the same volume.
             float groundBlend = GetGroundBlend(heightAboveGround);
             float windScale = Mathf.Lerp(_settings.NearGroundWindMultiplier, 1f, groundBlend);
             float diffusionScale = Mathf.Lerp(_settings.NearGroundDiffusionMultiplier, 1f, groundBlend);
@@ -112,7 +125,7 @@ namespace PersistentSRBSmoke
 
             float opacityFactor = Mathf.Pow(Mathf.Clamp01(atmosphericFactor), 0.32f);
 
-            float localBrightness = UnityEngine.Random.Range(0.82f, 1.08f);
+            float localBrightness = UnityEngine.Random.Range(0.92f, 1.08f);
             Color smokeColor = new Color(
                 Mathf.Clamp01(profile.BaseColor.r * localBrightness),
                 Mathf.Clamp01(profile.BaseColor.g * localBrightness),
@@ -124,7 +137,7 @@ namespace PersistentSRBSmoke
                 * 0.48f
                 * profile.OpacityMultiplier
                 * opacityFactor
-                * UnityEngine.Random.Range(0.88f, 1.08f));
+                * UnityEngine.Random.Range(0.90f, 1.06f));
 
             float altitudeExpansion = Mathf.Lerp(
                 _settings.HighAltitudeSizeMultiplier,
@@ -147,12 +160,6 @@ namespace PersistentSRBSmoke
             _system.Emit(emit, 1);
         }
 
-        /// <summary>
-        /// Unity's particle clock does not reliably follow KSP's on-rails time warp. Advance only
-        /// the difference between KSP universal time and the amount Unity already simulated this
-        /// frame. This makes lifetime, size-over-lifetime, colour fade, noise and velocity motion
-        /// all evolve at the same rate as the game clock.
-        /// </summary>
         public void AdvanceUniversalTime(float gameDeltaTime, float unityDeltaTime)
         {
             if (_system == null || gameDeltaTime <= 0f)
@@ -169,9 +176,6 @@ namespace PersistentSRBSmoke
                 * Mathf.Max(1f, largestLifetimeMultiplier)
                 * 1.15f;
 
-            // A very large rails-warp jump means every existing particle is older than its maximum
-            // possible lifetime. Clearing is both exact for our purposes and avoids hundreds of
-            // expensive simulation substeps.
             if (extra >= maximumPossibleLifetime)
             {
                 _system.Clear(true);
@@ -210,8 +214,6 @@ namespace PersistentSRBSmoke
             float bodyRadius = (float)body.Radius;
             float response = 1f - Mathf.Exp(-Mathf.Max(0f, _settings.DynamicWindResponse) * dt);
 
-            // Build one coarse density field per dynamic update. Only cloudlets near the captured
-            // launch surface enter the grid, so the long upper-atmosphere trail is unaffected.
             _padCloud.Rebuild(
                 _particleBuffer,
                 count,
@@ -333,10 +335,10 @@ namespace PersistentSRBSmoke
             gradient.SetKeys(
                 new[]
                 {
-                    new GradientColorKey(new Color(0.94f, 0.94f, 0.94f), 0f),
-                    new GradientColorKey(new Color(0.90f, 0.90f, 0.89f), 0.20f),
-                    new GradientColorKey(new Color(0.84f, 0.84f, 0.83f), 0.65f),
-                    new GradientColorKey(new Color(0.76f, 0.77f, 0.77f), 1f)
+                    new GradientColorKey(new Color(1.00f, 1.00f, 1.00f), 0f),
+                    new GradientColorKey(new Color(0.99f, 0.99f, 0.98f), 0.20f),
+                    new GradientColorKey(new Color(0.97f, 0.97f, 0.96f), 0.65f),
+                    new GradientColorKey(new Color(0.94f, 0.95f, 0.95f), 1f)
                 },
                 new[]
                 {
@@ -358,60 +360,6 @@ namespace PersistentSRBSmoke
             noise.octaveCount = 2;
         }
 
-        private static Mesh CreateCloudletMesh()
-        {
-            Vector3[] normals =
-            {
-                Vector3.right,
-                Vector3.up,
-                Vector3.forward,
-                new Vector3(1f, 1f, 1f).normalized,
-                new Vector3(-1f, 1f, 1f).normalized,
-                new Vector3(1f, -1f, 1f).normalized
-            };
-
-            var vertices = new List<Vector3>(normals.Length * 4);
-            var uvs = new List<Vector2>(normals.Length * 4);
-            var triangles = new List<int>(normals.Length * 6);
-
-            for (int i = 0; i < normals.Length; i++)
-            {
-                Vector3 normal = normals[i];
-                Vector3 reference = Mathf.Abs(Vector3.Dot(normal, Vector3.up)) > 0.88f
-                    ? Vector3.right
-                    : Vector3.up;
-
-                Vector3 axisA = Vector3.Cross(normal, reference).normalized * 0.5f;
-                Vector3 axisB = Vector3.Cross(normal, axisA).normalized * 0.5f;
-
-                int baseIndex = vertices.Count;
-                vertices.Add(-axisA - axisB);
-                vertices.Add(axisA - axisB);
-                vertices.Add(axisA + axisB);
-                vertices.Add(-axisA + axisB);
-
-                uvs.Add(new Vector2(0f, 0f));
-                uvs.Add(new Vector2(1f, 0f));
-                uvs.Add(new Vector2(1f, 1f));
-                uvs.Add(new Vector2(0f, 1f));
-
-                triangles.Add(baseIndex + 0);
-                triangles.Add(baseIndex + 1);
-                triangles.Add(baseIndex + 2);
-                triangles.Add(baseIndex + 0);
-                triangles.Add(baseIndex + 2);
-                triangles.Add(baseIndex + 3);
-            }
-
-            Mesh mesh = new Mesh();
-            mesh.name = "PersistentSRBSmoke.RuntimeCloudlet";
-            mesh.SetVertices(vertices);
-            mesh.SetUVs(0, uvs);
-            mesh.SetTriangles(triangles, 0);
-            mesh.RecalculateBounds();
-            return mesh;
-        }
-
         private static float HashToUnit(uint value)
         {
             value ^= value >> 17;
@@ -422,13 +370,14 @@ namespace PersistentSRBSmoke
             return (value & 0x00FFFFFFU) / 16777215f;
         }
 
-        private static Texture2D CreateSmokeTexture(int size)
+        private static Texture2D CreateSmokeTexture(int size, float alphaScale)
         {
             Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false, true);
             texture.name = "PersistentSRBSmoke.RuntimeDensityTexture";
             texture.wrapMode = TextureWrapMode.Clamp;
             texture.filterMode = FilterMode.Bilinear;
 
+            alphaScale = Mathf.Clamp(alphaScale, 0.03f, 1f);
             float seedX = UnityEngine.Random.Range(10f, 1000f);
             float seedY = UnityEngine.Random.Range(10f, 1000f);
             for (int y = 0; y < size; y++)
@@ -446,16 +395,12 @@ namespace PersistentSRBSmoke
                     float n3 = Mathf.PerlinNoise(seedX * 0.13f + u * 10.7f, seedY * 0.13f + v * 10.7f);
                     float noise = Mathf.Clamp01(n1 * 0.58f + n2 * 0.29f + n3 * 0.13f);
                     float alpha = Mathf.Pow(radial, 0.64f) * Mathf.Lerp(0.36f, 1f, noise);
-                    alpha = Mathf.Clamp01((alpha - 0.018f) * 1.16f);
+                    alpha = Mathf.Clamp01((alpha - 0.018f) * 1.16f) * alphaScale;
 
-                    // RGB starts neutral. VolumetricSmokeShader dynamically relights it from this
-                    // preserved radial/noise density profile while alpha remains the optical density.
                     texture.SetPixel(x, y, new Color(1f, 1f, 1f, alpha));
                 }
             }
 
-            // Keep the texture CPU-readable: the fallback volumetric renderer updates RGB at a
-            // throttled rate according to sun/camera direction while preserving alpha density.
             texture.Apply(false, false);
             return texture;
         }
@@ -469,6 +414,7 @@ namespace PersistentSRBSmoke
                 _floatingOriginRegistered = false;
             }
 
+            if (_raymarchRenderer != null) _raymarchRenderer.Dispose();
             if (_volumetricShader != null) _volumetricShader.Dispose();
             if (_cloudletMesh != null) UnityEngine.Object.Destroy(_cloudletMesh);
             if (_texture != null) UnityEngine.Object.Destroy(_texture);
