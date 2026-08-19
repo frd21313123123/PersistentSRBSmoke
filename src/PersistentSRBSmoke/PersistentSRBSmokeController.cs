@@ -152,7 +152,11 @@ namespace PersistentSRBSmoke
                 _hasUniversalTime = true;
                 _pendingDynamicGameTime = 0.0;
 
-                Debug.Log("[PersistentSRBSmoke] v0.3.2 initialized with UT time-warp sync, pad hold and stock-smoke suppression.");
+                Debug.Log(
+                    "[PersistentSRBSmoke] v0.4.0 initialized. VolumetricLighting=" +
+                    _settings.VolumetricLightingEnabled +
+                    " customShader=" + _smoke.UsingCustomVolumetricShader +
+                    " softParticles=" + _smoke.SoftParticlesActive);
             }
             catch (Exception ex)
             {
@@ -239,14 +243,35 @@ namespace PersistentSRBSmoke
                     "[PersistentSRBSmoke] SRB emitters=" + _emitters.Count +
                     " particles=" + _smoke.ParticleCount +
                     " UTdt=" + gameDt.ToString("F2") +
-                    " effectiveWarp=" + warpRatio.ToString("F1") + "x");
+                    " effectiveWarp=" + warpRatio.ToString("F1") + "x" +
+                    " volumetric=" + _settings.VolumetricLightingEnabled +
+                    " soft=" + _smoke.SoftParticlesActive);
                 _nextDebugLog = now + 5f;
             }
         }
 
         private void LateUpdate()
         {
-            if (_stockSmokeSuppressor == null || !_settings.SuppressStockSmoke || !HighLogic.LoadedSceneIsFlight)
+            if (_smoke == null || !HighLogic.LoadedSceneIsFlight)
+                return;
+
+            // Update optical parameters immediately before the flight camera renders. This keeps the
+            // HG phase angle and pseudo-normal lighting responsive while the user moves the camera.
+            if (_settings.VolumetricLightingEnabled)
+            {
+                Vessel activeVessel = FlightGlobals.ActiveVessel;
+                if (activeVessel != null && activeVessel.mainBody != null)
+                {
+                    Camera camera = ResolveFlightCamera();
+                    _smoke.UpdateVolumetricLighting(
+                        activeVessel.mainBody,
+                        camera,
+                        activeVessel.transform.position,
+                        GetAtmosphereFactor(activeVessel));
+                }
+            }
+
+            if (_stockSmokeSuppressor == null || !_settings.SuppressStockSmoke)
                 return;
 
             float now = Time.realtimeSinceStartup;
@@ -262,6 +287,21 @@ namespace PersistentSRBSmoke
             // Engine FX controllers can re-enable their emitters during Update/FixedUpdate. Applying
             // the cached suppression in LateUpdate ensures the stock smoke is still off at render time.
             _stockSmokeSuppressor.SuppressCached(_solidFuelParts);
+        }
+
+        private static Camera ResolveFlightCamera()
+        {
+            try
+            {
+                if (FlightCamera.fetch != null && FlightCamera.fetch.mainCamera != null)
+                    return FlightCamera.fetch.mainCamera;
+            }
+            catch
+            {
+                // Scene changes can temporarily invalidate FlightCamera.fetch.
+            }
+
+            return Camera.main;
         }
 
         private void UpdateEmitter(EngineEmitter emitter, float dt)
