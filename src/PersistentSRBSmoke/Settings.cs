@@ -9,11 +9,30 @@ namespace PersistentSRBSmoke
         public bool Enabled = true;
 
         // Performance / lifetime
-        public int MaxParticles = 48000;
+        public int MaxParticles = 36000;
         public float Lifetime = 210f;
-        public int MaxEmitPerFrame = 192;
-        public float DynamicMotionHz = 10f;
+        public int MaxEmitPerFrame = 160;
+        public float DynamicMotionHz = 6f;
         public float TeleportDistance = 750f;
+        public float EngineScanInterval = 2f;
+
+        // Render cost controls. Three crossed quads keep a cloudlet volumetric-looking while
+        // cutting transparent overdraw roughly in half compared with the old six-plane mesh.
+        public int CloudletPlanes = 3;
+        public bool SortParticles = false;
+
+        // Dynamic-motion LOD. Old/far particles keep their current velocity between updates and
+        // are refreshed less often; Unity still integrates their motion every frame.
+        public float DynamicMidAge = 0.20f;
+        public float DynamicOldAge = 0.55f;
+        public int DynamicMidStride = 2;
+        public int DynamicOldStride = 4;
+        public float DynamicFarDistance = 5000f;
+        public int DynamicFarStrideMultiplier = 2;
+
+        // Number of altitude samples used by WindModel. Perlin noise is evaluated once per layer
+        // per dynamic tick instead of several times for every smoke particle.
+        public int WindCacheLayers = 96;
 
         // KSP time warp / universal-time synchronization
         public bool FollowUniversalTime = true;
@@ -35,8 +54,8 @@ namespace PersistentSRBSmoke
         public float SizeGrowth = 18.0f;
         public float HighAltitudeSizeMultiplier = 1.85f;
         public float Opacity = 0.80f;
-        public float SmokeBrightness = 0.78f;
-        public float EngineColorVariation = 0.08f;
+        public float SmokeBrightness = 0.96f;
+        public float EngineColorVariation = 0.05f;
 
         // Engine-dependent smoke scaling. KSP engine thrust is measured in kN.
         public bool EngineScalingEnabled = true;
@@ -110,6 +129,16 @@ namespace PersistentSRBSmoke
                 settings.MaxEmitPerFrame = ReadInt(node, "maxEmitPerFrame", settings.MaxEmitPerFrame, 1, 2000);
                 settings.DynamicMotionHz = ReadFloat(node, "dynamicMotionHz", settings.DynamicMotionHz, 1f, 30f);
                 settings.TeleportDistance = ReadFloat(node, "teleportDistance", settings.TeleportDistance, 10f, 10000f);
+                settings.EngineScanInterval = ReadFloat(node, "engineScanInterval", settings.EngineScanInterval, 0.25f, 30f);
+                settings.CloudletPlanes = ReadInt(node, "cloudletPlanes", settings.CloudletPlanes, 2, 6);
+                settings.SortParticles = ReadBool(node, "sortParticles", settings.SortParticles);
+                settings.DynamicMidAge = ReadFloat(node, "dynamicMidAge", settings.DynamicMidAge, 0f, 0.95f);
+                settings.DynamicOldAge = ReadFloat(node, "dynamicOldAge", settings.DynamicOldAge, 0.01f, 1f);
+                settings.DynamicMidStride = ReadInt(node, "dynamicMidStride", settings.DynamicMidStride, 1, 16);
+                settings.DynamicOldStride = ReadInt(node, "dynamicOldStride", settings.DynamicOldStride, 1, 32);
+                settings.DynamicFarDistance = ReadFloat(node, "dynamicFarDistance", settings.DynamicFarDistance, 100f, 100000f);
+                settings.DynamicFarStrideMultiplier = ReadInt(node, "dynamicFarStrideMultiplier", settings.DynamicFarStrideMultiplier, 1, 16);
+                settings.WindCacheLayers = ReadInt(node, "windCacheLayers", settings.WindCacheLayers, 8, 512);
 
                 settings.FollowUniversalTime = ReadBool(node, "followUniversalTime", settings.FollowUniversalTime);
                 settings.MaxWarpSimulationStep = ReadFloat(node, "maxWarpSimulationStep", settings.MaxWarpSimulationStep, 0.25f, 30f);
@@ -183,6 +212,10 @@ namespace PersistentSRBSmoke
                 settings.EngineMaxThrust = settings.EngineMinThrust + 1f;
             if (settings.PadCloudDensitySaturation <= settings.PadCloudDensityThreshold)
                 settings.PadCloudDensitySaturation = settings.PadCloudDensityThreshold + 1f;
+            if (settings.DynamicOldAge < settings.DynamicMidAge)
+                settings.DynamicOldAge = settings.DynamicMidAge;
+            if (settings.DynamicOldStride < settings.DynamicMidStride)
+                settings.DynamicOldStride = settings.DynamicMidStride;
 
             return settings;
         }
