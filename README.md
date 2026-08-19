@@ -2,36 +2,70 @@
 
 [![Build](https://github.com/frd21313123123/PersistentSRBSmoke/actions/workflows/build.yml/badge.svg)](https://github.com/frd21313123123/PersistentSRBSmoke/actions/workflows/build.yml)
 
-A from-scratch KSP 1.12.x plugin that creates persistent, expanding world-space smoke trails for engines that consume `SolidFuel`.
+A from-scratch KSP 1.12.x plugin that creates persistent, expanding, volumetric-inspired smoke trails for engines that consume `SolidFuel`.
 
-## What already works in this MVP
+## v0.4 rendering
+
+PersistentSRBSmoke now evaluates smoke lighting dynamically instead of treating every cloudlet as an equally lit translucent sprite.
+
+- **Directional Kerbol lighting**: the renderer resolves the sun direction and elevation above the local horizon every frame.
+- **Atmospheric attenuation**: direct sunlight is dimmed using a Beer-Lambert-style optical-depth approximation, with warmer light near the horizon.
+- **Sky ambient + ground bounce**: smoke receives diffuse light from the sky dome and a weaker reflected-light term from the surface.
+- **Dual-lobe Henyey-Greenstein phase scattering**: a strong forward lobe produces a bright backlit / silver-lining response, while a weaker backward lobe keeps front-lit smoke soft rather than flat.
+- **Multiple-scattering approximation**: dense cloudlets recover some internal illumination instead of becoming uniformly black.
+- **Beer-Powder response**: density controls extinction and powder-like light recovery through the interior of a cloudlet.
+- **Spherical pseudo-normal shading**: the procedural density texture is dynamically relit from its UV coordinates so each slice reads more like a rounded cloud volume.
+- **Soft Particles**: the stock KSP particle shader's depth-fade path is enabled (`SOFTPARTICLES_ON`, `_CameraDepthTexture`, `_InvFade`) so smoke blends into terrain, the launch pad and vessel geometry instead of being sharply clipped.
+- **Dynamic fallback**: if a custom shader named `PersistentSRBSmoke/VolumetricSmoke` is present, its volumetric parameters are populated directly. Otherwise the built-in KSP shader plus CPU texture relighting is used automatically. No external shader loader is required for the default path.
+
+## Other implemented systems
 
 - Automatically detects loaded `ModuleEngines` / `ModuleEnginesFX` that use `SolidFuel`.
 - Emits a continuous trail from every engine thrust transform.
-- Uses world-space Unity Shuriken particles so smoke remains behind the rocket.
-- Registers the particle system with KSP `FloatingOrigin`, which is important for long trails in flight.
-- Fills gaps based on distance travelled, not only particles-per-second.
-- Smoke expands and fades over ~150 seconds.
-- Atmospheric-density scaling: dense near sea level, reduced near the edge of the atmosphere, none in vacuum.
-- Procedural smoke texture generated at runtime; no borrowed textures/assets are required.
-- Built-in particle noise for basic turbulent breakup.
-- Handles detached, loaded SRBs because all loaded vessels are scanned, not only the active vessel.
+- Uses world-space Unity Shuriken particles and registers the system with KSP `FloatingOrigin`.
+- Fills gaps based on distance travelled, keeping the trail continuous at high vehicle speed.
+- Engine-dependent smoke profiles: small separation motors emit fewer, smaller, darker, shorter-lived cloudlets than large SRBs.
+- Suppresses stock/legacy SRB smoke while leaving Waterfall / flame effects alone.
+- Long-lived expansion, fade, turbulence, buoyancy and altitude-dependent wind shear.
+- KSP Universal Time synchronization, so smoke ages and moves correctly under time warp.
+- Near-pad hold plus a density-driven pad-cloud solver that pushes dense exhaust sideways and lifts the thinning outer lobes.
+- Procedural smoke density texture generated at runtime; no third-party smoke texture is redistributed.
 
-## Current limitations
-
-This is the first implementation pass. It does **not** yet include:
-
-- true altitude-dependent wind layers / wind shear;
-- depth-aware lighting and self-shadowing;
-- ground collision / launch-pad billowing;
-- GPU instancing/custom smoke shader;
-- in-game settings GUI;
-- LOD merging for very old/distant smoke;
 ## Installation
 
-1. Download the latest `PersistentSRBSmoke-v*.zip` from [Releases](https://github.com/frd21313123123/PersistentSRBSmoke/releases).
-2. Extract the archive into your main Kerbal Space Program root directory (or copy the `PersistentSRBSmoke` folder into your KSP `GameData/` folder).
-3. The resulting path should be `<KSP_DIR>/GameData/PersistentSRBSmoke/`.
+1. Download the latest `PersistentSRBSmoke-v*.zip` from Releases or a test artifact from GitHub Actions.
+2. Extract it into the Kerbal Space Program root directory, or copy `PersistentSRBSmoke` into `GameData/`.
+3. The final path should be `<KSP_DIR>/GameData/PersistentSRBSmoke/`.
+
+Waterfall can remain installed. PersistentSRBSmoke renders the persistent SRB cloud while Waterfall can continue rendering the engine flame/plume.
+
+## Volumetric settings
+
+Edit:
+
+`GameData/PersistentSRBSmoke/PluginData/Settings.cfg`
+
+Default v0.4 optical settings:
+
+```cfg
+volumetricLightingEnabled = true
+volumetricScatteringForward = 0.85
+volumetricScatteringBackward = -0.35
+volumetricMultipleScattering = 0.55
+volumetricSoftDepthFactor = 1.65
+volumetricSunIntensity = 1.10
+volumetricAmbientIntensity = 0.46
+volumetricBeerPowderFactor = 0.72
+```
+
+Useful tuning notes:
+
+- Increase `volumetricScatteringForward` for a stronger silver lining when the plume is between the camera and Kerbol.
+- Increase `volumetricMultipleScattering` if dense smoke interiors are too dark.
+- Increase `volumetricSoftDepthFactor` for a wider, softer terrain/geometry intersection fade.
+- Lower `volumetricSunIntensity` if the sun-facing edge becomes too bright.
+- Increase `volumetricAmbientIntensity` if shadowed smoke is too dark.
+- `volumetricBeerPowderFactor` changes the balance between extinction in dense smoke and powder-like internal light recovery.
 
 ## Build on Windows
 
@@ -39,53 +73,39 @@ Requirements:
 
 1. Kerbal Space Program 1.12.x installed.
 2. Visual Studio 2022 with **.NET desktop development** / .NET Framework build tools.
-3. Set the `KSP_DIR` environment variable to your KSP folder.
+3. Set `KSP_DIR` to the KSP directory.
 
-Example for a Steam install:
+Example:
 
 ```bat
 set KSP_DIR=C:\Program Files (x86)\Steam\steamapps\common\Kerbal Space Program
 build.bat
 ```
 
-The project targets .NET Framework 4.7 and references KSP/Unity assemblies from:
+The project targets .NET Framework 4.7 and uses KSP/Unity assemblies from:
 
 `%KSP_DIR%\KSP_x64_Data\Managed`
 
-After a successful build, the DLL is copied automatically to:
+A successful local build copies the DLL to:
 
 `%KSP_DIR%\GameData\PersistentSRBSmoke\Plugins\PersistentSRBSmoke.dll`
 
-Copy the repository's `GameData/PersistentSRBSmoke` folder into your KSP `GameData` as well so `PluginData/Settings.cfg` is present.
+## Automatic verification and builds
 
-## Automatic builds
+GitHub Actions runs on pull requests, pushes to `main`, tags, and manual runs. CI now:
 
-GitHub Actions builds the plugin on every push to `main`, on pull requests, and on manual workflow runs. The resulting installation ZIP is available under the workflow run's **Artifacts** section.
+1. validates the structure of `Settings.cfg` and checks that all required volumetric keys exist;
+2. restores the public KSP skeleton references;
+3. compiles **Debug** with warnings treated as errors;
+4. compiles **Release** with warnings treated as errors;
+5. packages the Release DLL and `GameData` files into an installation ZIP.
 
-CI compiles against public KSP 1.11.2 skeleton reference assemblies only. These are compile-time stubs and are **not** included in the release ZIP. Local builds with `KSP_DIR` continue to compile against your real KSP 1.12.x assemblies.
+The KSP skeleton assemblies are compile-time stubs only and are not redistributed in the mod archive. Local builds with `KSP_DIR` still compile against the real KSP 1.12.x assemblies.
 
-Push a tag such as `v0.1.0` to build the mod and automatically create a GitHub Release containing the installation ZIP.
+Tags such as `v0.4.0` automatically publish a GitHub Release.
 
-## Tuning
+## Performance
 
-Edit:
+The default rendering path does not raymarch every pixel through a global 3D volume. Instead it keeps the existing cloudlet particle representation and adds physically inspired optical terms plus a throttled dynamic density-texture relight. This keeps v0.4 practical for long SRB trails with tens of thousands of particles.
 
-`GameData/PersistentSRBSmoke/PluginData/Settings.cfg`
-
-Good first values for a dramatic shuttle-like trail:
-
-```cfg
-lifetime = 180
-baseEmissionRate = 30
-particlesPerMeter = 0.28
-startSize = 3.2
-sizeGrowth = 10.5
-opacity = 0.76
-turbulenceStrength = 0.8
-```
-
-For better FPS, reduce `maxParticles`, `lifetime`, and `particlesPerMeter` first.
-
-## Compatibility design
-
-The plugin does not replace Waterfall effects. Waterfall can continue rendering the engine plume while this plugin renders persistent smoke behind solid rocket motors.
+For better FPS, reduce `maxParticles`, `lifetime`, `particlesPerMeter`, or `dynamicMotionHz` first.
