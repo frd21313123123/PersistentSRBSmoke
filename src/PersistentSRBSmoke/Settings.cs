@@ -7,12 +7,13 @@ namespace PersistentSRBSmoke
     internal sealed class SmokeSettings
     {
         public bool Enabled = true;
-        public int MaxParticles = 16000;
+        public int MaxParticles = 32000;
         public float Lifetime = 150f;
         public float BaseEmissionRate = 24f;
         public float ParticlesPerMeter = 0.22f;
-        public float StartSize = 2.8f;
-        public float SizeGrowth = 9.0f;
+        public float MaxParticleSpacing = 3.0f;
+        public float StartSize = 6.0f;
+        public float SizeGrowth = 10.5f;
         public float DriftSpeed = 0.75f;
         public float Buoyancy = 0.18f;
         public float TurbulenceStrength = 0.65f;
@@ -49,6 +50,7 @@ namespace PersistentSRBSmoke
                 settings.Lifetime = ReadFloat(node, "lifetime", settings.Lifetime, 5f, 600f);
                 settings.BaseEmissionRate = ReadFloat(node, "baseEmissionRate", settings.BaseEmissionRate, 0f, 300f);
                 settings.ParticlesPerMeter = ReadFloat(node, "particlesPerMeter", settings.ParticlesPerMeter, 0f, 5f);
+                settings.MaxParticleSpacing = ReadFloat(node, "maxParticleSpacing", settings.MaxParticleSpacing, 0.25f, 25f);
                 settings.StartSize = ReadFloat(node, "startSize", settings.StartSize, 0.1f, 50f);
                 settings.SizeGrowth = ReadFloat(node, "sizeGrowth", settings.SizeGrowth, 1f, 30f);
                 settings.DriftSpeed = ReadFloat(node, "driftSpeed", settings.DriftSpeed, 0f, 20f);
