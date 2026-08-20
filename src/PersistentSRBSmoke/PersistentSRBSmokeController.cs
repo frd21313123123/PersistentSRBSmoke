@@ -7,6 +7,8 @@ namespace PersistentSRBSmoke
     internal struct EngineSmokeProfile
     {
         public float Strength;
+        public float SolidFuelMass;
+        public float PartMass;
         public float EmissionMultiplier;
         public float SizeMultiplier;
         public float LifetimeMultiplier;
@@ -18,26 +20,29 @@ namespace PersistentSRBSmoke
         {
             emitterShare = Mathf.Clamp(emitterShare, 0.05f, 1f);
 
+            float solidFuelMass = 0f;
+            float partMass = 0f;
             float strength = 1f;
             if (settings.EngineScalingEnabled && engine != null)
             {
-                float thrust = Mathf.Max(0.1f, engine.maxThrust);
-                float minLog = Mathf.Log10(Mathf.Max(0.1f, settings.EngineMinThrust));
-                float maxLog = Mathf.Log10(Mathf.Max(settings.EngineMinThrust + 0.1f, settings.EngineMaxThrust));
-                float thrustLog = Mathf.Log10(thrust);
-                strength = Mathf.Clamp01(Mathf.InverseLerp(minLog, maxLog, thrustLog));
+                strength = CalculateMotorScale(engine, settings, out solidFuelMass, out partMass);
             }
 
+            // Ordinary emission/opacity scaling remains smooth, while persistence deliberately uses
+            // a steeper curve. A tiny separation motor should disappear quickly instead of receiving
+            // nearly the same minutes-long lifetime as a large first-stage SRB.
             float curve = Mathf.SmoothStep(0f, 1f, strength);
+            float persistenceCurve = Mathf.Pow(curve, 1.80f);
+            float sizeCurve = Mathf.Pow(curve, 1.25f);
 
             float emission = settings.EngineScalingEnabled
                 ? Mathf.Lerp(settings.SmallEngineEmissionMultiplier, settings.LargeEngineEmissionMultiplier, curve)
                 : 1f;
             float size = settings.EngineScalingEnabled
-                ? Mathf.Lerp(settings.SmallEngineSizeMultiplier, settings.LargeEngineSizeMultiplier, curve)
+                ? Mathf.Lerp(settings.SmallEngineSizeMultiplier, settings.LargeEngineSizeMultiplier, sizeCurve)
                 : 1f;
             float lifetime = settings.EngineScalingEnabled
-                ? Mathf.Lerp(settings.SmallEngineLifetimeMultiplier, settings.LargeEngineLifetimeMultiplier, curve)
+                ? Mathf.Lerp(settings.SmallEngineLifetimeMultiplier, settings.LargeEngineLifetimeMultiplier, persistenceCurve)
                 : 1f;
             float opacity = settings.EngineScalingEnabled
                 ? Mathf.Lerp(settings.SmallEngineOpacityMultiplier, settings.LargeEngineOpacityMultiplier, curve)
@@ -70,6 +75,8 @@ namespace PersistentSRBSmoke
             return new EngineSmokeProfile
             {
                 Strength = strength,
+                SolidFuelMass = solidFuelMass,
+                PartMass = partMass,
                 EmissionMultiplier = Mathf.Max(0.01f, emission),
                 SizeMultiplier = Mathf.Max(0.05f, size),
                 LifetimeMultiplier = Mathf.Max(0.05f, lifetime),
@@ -77,6 +84,84 @@ namespace PersistentSRBSmoke
                 SpacingMultiplier = Mathf.Max(0.20f, spacing),
                 BaseColor = baseColor
             };
+        }
+
+        /// <summary>
+        /// Estimate how much smoke mass a motor can put into one section of trail. SolidFuel mass is
+        /// the primary signal because it tracks the physical propellant volume of an SRB, while dry
+        /// part mass and max thrust provide robust fallbacks for unusual/modded motors.
+        /// </summary>
+        private static float CalculateMotorScale(
+            ModuleEngines engine,
+            SmokeSettings settings,
+            out float solidFuelMass,
+            out float partMass)
+        {
+            solidFuelMass = GetSolidFuelMass(engine == null ? null : engine.part);
+            partMass = engine != null && engine.part != null
+                ? Mathf.Max(0f, engine.part.mass)
+                : 0f;
+
+            float thrust = engine == null ? 0f : Mathf.Max(0.1f, engine.maxThrust);
+            float thrustScale = LogNormalize(
+                thrust,
+                Mathf.Max(0.1f, settings.EngineMinThrust),
+                Mathf.Max(settings.EngineMinThrust + 0.1f, settings.EngineMaxThrust));
+
+            // 0.03 t is roughly the scale of very small separation motors; 25 t of SolidFuel is
+            // already in large-booster territory. Logarithmic mapping keeps modded sizes sensible.
+            float fuelScale = solidFuelMass > 0.0001f
+                ? LogNormalize(solidFuelMass, 0.03f, 25f)
+                : 0f;
+            float dryMassScale = partMass > 0.0001f
+                ? LogNormalize(partMass, 0.02f, 8f)
+                : 0f;
+
+            float weighted = thrustScale * 0.30f;
+            float totalWeight = 0.30f;
+            if (solidFuelMass > 0.0001f)
+            {
+                weighted += fuelScale * 0.55f;
+                totalWeight += 0.55f;
+            }
+            if (partMass > 0.0001f)
+            {
+                weighted += dryMassScale * 0.15f;
+                totalWeight += 0.15f;
+            }
+
+            return Mathf.Clamp01(weighted / Mathf.Max(0.001f, totalWeight));
+        }
+
+        private static float GetSolidFuelMass(Part part)
+        {
+            if (part == null || part.Resources == null)
+                return 0f;
+
+            try
+            {
+                PartResource resource = part.Resources["SolidFuel"];
+                if (resource == null || resource.info == null || resource.maxAmount <= 0.0)
+                    return 0f;
+
+                // KSP resource density is tonnes per resource unit.
+                return Mathf.Max(0f, (float)(resource.maxAmount * resource.info.density));
+            }
+            catch
+            {
+                return 0f;
+            }
+        }
+
+        private static float LogNormalize(float value, float minValue, float maxValue)
+        {
+            value = Mathf.Max(0.000001f, value);
+            minValue = Mathf.Max(0.000001f, minValue);
+            maxValue = Mathf.Max(minValue * 1.001f, maxValue);
+
+            float minLog = Mathf.Log10(minValue);
+            float maxLog = Mathf.Log10(maxValue);
+            return Mathf.Clamp01(Mathf.InverseLerp(minLog, maxLog, Mathf.Log10(value)));
         }
 
         private static float StableHashToUnit(string text)
@@ -456,7 +541,9 @@ namespace PersistentSRBSmoke
                 Debug.Log(
                     "[PersistentSRBSmoke] profile part=" + partName +
                     " thrust=" + thrust.ToString("F1") + "kN" +
-                    " strength=" + profile.Strength.ToString("F2") +
+                    " solidFuelMass=" + profile.SolidFuelMass.ToString("F3") + "t" +
+                    " partMass=" + profile.PartMass.ToString("F3") + "t" +
+                    " motorScale=" + profile.Strength.ToString("F2") +
                     " emission=" + profile.EmissionMultiplier.ToString("F2") +
                     " size=" + profile.SizeMultiplier.ToString("F2") +
                     " lifetime=" + profile.LifetimeMultiplier.ToString("F2"));
