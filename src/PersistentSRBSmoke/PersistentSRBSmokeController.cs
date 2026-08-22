@@ -9,6 +9,7 @@ namespace PersistentSRBSmoke
         public float Strength;
         public float SolidFuelMass;
         public float PartMass;
+        public float EmitterShare;
         public float EmissionMultiplier;
         public float SizeMultiplier;
         public float LifetimeMultiplier;
@@ -77,6 +78,7 @@ namespace PersistentSRBSmoke
                 Strength = strength,
                 SolidFuelMass = solidFuelMass,
                 PartMass = partMass,
+                EmitterShare = emitterShare,
                 EmissionMultiplier = Mathf.Max(0.01f, emission),
                 SizeMultiplier = Mathf.Max(0.05f, size),
                 LifetimeMultiplier = Mathf.Max(0.05f, lifetime),
@@ -269,8 +271,29 @@ namespace PersistentSRBSmoke
             }
 
             float dt = Mathf.Max(0.001f, Time.fixedDeltaTime);
+            float activeEmitterWeight = 0f;
             foreach (EngineEmitter emitter in _emitters.Values)
-                UpdateEmitter(emitter, dt);
+            {
+                if (emitter.Engine != null && IsProducingThrust(emitter.Engine))
+                    activeEmitterWeight += Mathf.Clamp(emitter.Profile.EmitterShare, 0.05f, 1f);
+            }
+
+            float emitterBudgetScale = activeEmitterWeight <= 0f
+                ? 1f
+                : Mathf.Clamp(
+                    _settings.FullDensityEmitterBudget / activeEmitterWeight,
+                    _settings.MinimumEmitterDensityScale,
+                    1f);
+
+            float occupancy = _smoke.ParticleCount / (float)Mathf.Max(1, _settings.MaxParticles);
+            float capacityScale = Mathf.Lerp(
+                1f,
+                0.55f,
+                Mathf.SmoothStep(0.85f, 0.98f, occupancy));
+            float globalEmissionScale = emitterBudgetScale * capacityScale;
+            float opticalDepthScale = 1f / Mathf.Max(0.25f, globalEmissionScale);
+            foreach (EngineEmitter emitter in _emitters.Values)
+                UpdateEmitter(emitter, dt, globalEmissionScale, opticalDepthScale);
         }
 
         private void Update()
@@ -304,7 +327,13 @@ namespace PersistentSRBSmoke
                 _pendingDynamicGameTime += unityDt;
 
             float now = Time.realtimeSinceStartup;
-            float dynamicInterval = 1f / Mathf.Max(1f, _settings.DynamicMotionHz);
+            // EVE obtains much of its speed by time-slicing work that is not currently visible.
+            // Apply the same safe principle to simulation: off-screen smoke keeps Unity velocity
+            // integration, while expensive wind/flow reevaluation runs at a lower cadence.
+            float dynamicHz = _smoke.IsVisible
+                ? _settings.DynamicMotionHz
+                : Mathf.Min(_settings.DynamicMotionHz, _settings.OffscreenDynamicMotionHz);
+            float dynamicInterval = 1f / Mathf.Max(0.1f, dynamicHz);
             if (now >= _nextDynamicMotion && _pendingDynamicGameTime > 0.0)
             {
                 Vessel activeVessel = FlightGlobals.ActiveVessel;
@@ -359,7 +388,11 @@ namespace PersistentSRBSmoke
             _stockSmokeSuppressor.SuppressCached(_solidFuelParts);
         }
 
-        private void UpdateEmitter(EngineEmitter emitter, float dt)
+        private void UpdateEmitter(
+            EngineEmitter emitter,
+            float dt,
+            float globalEmissionScale,
+            float opticalDepthScale)
         {
             ModuleEngines engine = emitter.Engine;
             Transform exhaust = emitter.Transform;
@@ -398,25 +431,35 @@ namespace PersistentSRBSmoke
             float thrustFactor = GetThrustFactor(engine);
             EngineSmokeProfile profile = emitter.Profile;
 
-            float desired = (_settings.BaseEmissionRate * dt + travel * _settings.ParticlesPerMeter)
-                * thrustFactor
-                * atmosphere
-                * profile.EmissionMultiplier;
-            emitter.EmissionAccumulator += desired;
-            int accumulatedCount = Mathf.FloorToInt(emitter.EmissionAccumulator);
-
             float effectiveSpacing = _settings.MaxParticleSpacing
                 * Mathf.Lerp(_settings.HighAltitudeSpacingMultiplier, 1.0f, atmosphere)
                 * profile.SpacingMultiplier;
-            int spacingCount = travel > 0.001f
-                ? Mathf.CeilToInt(travel / Mathf.Max(0.25f, effectiveSpacing))
-                : 0;
 
-            int count = Mathf.Min(_settings.MaxEmitPerFrame, Mathf.Max(accumulatedCount, spacingCount));
+            // One continuous distance accumulator replaces the old max(timeCount, ceil(spacing))
+            // switch. Ceil changed count in whole particles at particular velocities, producing
+            // the visible bands reported during acceleration. Once moving, every metre now receives
+            // the same density regardless of frame rate or vessel speed. Time emission exists only
+            // near standstill to build the launch-pad cloud and fades with a smoothstep.
+            float speed = travel / Mathf.Max(0.001f, dt);
+            float fadeT = Mathf.Clamp01(speed / Mathf.Max(1f, _settings.TimeEmissionFadeSpeed));
+            float stationaryBlend = 1f - Mathf.SmoothStep(0f, 1f, fadeT);
+            float distanceDensity = Mathf.Max(
+                _settings.ParticlesPerMeter,
+                1f / Mathf.Max(0.25f, effectiveSpacing));
+            float desired = (
+                    _settings.BaseEmissionRate * dt * stationaryBlend
+                    + travel * distanceDensity)
+                * thrustFactor
+                * atmosphere
+                * profile.EmissionMultiplier
+                * Mathf.Clamp01(globalEmissionScale);
+            emitter.EmissionAccumulator += desired;
+            int accumulatedCount = Mathf.FloorToInt(emitter.EmissionAccumulator);
+            int count = Mathf.Min(_settings.MaxEmitPerFrame, accumulatedCount);
             if (count <= 0)
                 return;
 
-            emitter.EmissionAccumulator -= Mathf.Min(accumulatedCount, count);
+            emitter.EmissionAccumulator -= count;
 
             Vector3 up = vessel.upAxis;
             if (up.sqrMagnitude < 0.001f)
@@ -440,19 +483,45 @@ namespace PersistentSRBSmoke
             Vector3 wind = _wind == null ? Vector3.zero : _wind.GetWind(vessel, up, universalTime);
             float scale = Mathf.Lerp(0.78f, 1.30f, Mathf.Sqrt(thrustFactor));
             float heightAboveGround = GetHeightAboveGround(vessel);
+            Vector3 exhaustDirection = NearNozzleSmokeLayer.ResolveExhaustDirection(engine, exhaust, vessel);
+            float altitudeExpansion = Mathf.Lerp(
+                _settings.HighAltitudeSizeMultiplier,
+                1f,
+                Mathf.Clamp01(atmosphere));
+            float birthDiameter = _settings.StartSize
+                * scale
+                * profile.SizeMultiplier
+                * altitudeExpansion;
+            float nozzleOffset = birthDiameter * _settings.NozzleOffsetDiameters
+                + _settings.NozzleClearance;
 
             for (int i = 0; i < count; i++)
             {
-                float slotJitter = UnityEngine.Random.Range(-0.12f, 0.12f);
+                // Deposit samples throughout a real cross-section instead of keeping every
+                // cloudlet on a pencil-thin centre line. Dense spacing and low per-sample opacity
+                // make these lobes merge into one billowing volume rather than isolated beads.
+                float slotJitter = UnityEngine.Random.Range(-0.018f, 0.018f);
                 float t = count == 1 ? 1f : ((i + 0.5f + slotJitter) / count);
                 Vector3 point = Vector3.Lerp(previousPosition, currentPosition, Mathf.Clamp01(t));
 
-                float radialJitter = _settings.StartSize * scale * profile.SizeMultiplier * 0.12f;
+                // The particle mesh is centred on its position. Move that centre far enough down
+                // the real exhaust axis that its upper edge cannot overlap the nozzle or vehicle.
+                point += exhaustDirection * nozzleOffset;
+
+                float radialJitter = _settings.StartSize * scale * profile.SizeMultiplier * 0.24f;
                 float angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
                 float radius = Mathf.Sqrt(UnityEngine.Random.value) * radialJitter;
                 point += tangentA * (Mathf.Cos(angle) * radius) + tangentB * (Mathf.Sin(angle) * radius);
 
-                _smoke.Emit(point, up, wind, atmosphere, scale, profile, heightAboveGround);
+                _smoke.Emit(
+                    point,
+                    up,
+                    wind,
+                    atmosphere,
+                    scale,
+                    profile,
+                    heightAboveGround,
+                    opticalDepthScale);
             }
         }
 

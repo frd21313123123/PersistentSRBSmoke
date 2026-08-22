@@ -9,10 +9,11 @@ namespace PersistentSRBSmoke
         public bool Enabled = true;
 
         // Performance / lifetime
-        public int MaxParticles = 36000;
+        public int MaxParticles = 48000;
         public float Lifetime = 210f;
-        public int MaxEmitPerFrame = 160;
-        public float DynamicMotionHz = 6f;
+        public int MaxEmitPerFrame = 120;
+        public float DynamicMotionHz = 4f;
+        public float OffscreenDynamicMotionHz = 0.5f;
         public float TeleportDistance = 750f;
         public float EngineScanInterval = 2f;
 
@@ -21,18 +22,38 @@ namespace PersistentSRBSmoke
         public int CloudletPlanes = 3;
         public bool SortParticles = false;
 
+        // When EVE Volumetric Clouds is installed, reuse its already-loaded cloud-volume particle
+        // shader without linking or redistributing EVE. The normal material remains the fallback.
+        public bool PreferEveVolumetricShader = true;
+        public float VolumetricDensity = 1.05f;
+        public float VolumetricMinScatter = 0.82f;
+        public float VolumetricSoftDepth = 0.008f;
+
         // Dynamic-motion LOD. Old/far particles keep their current velocity between updates and
         // are refreshed less often; Unity still integrates their motion every frame.
         public float DynamicMidAge = 0.20f;
         public float DynamicOldAge = 0.55f;
-        public int DynamicMidStride = 2;
-        public int DynamicOldStride = 4;
-        public float DynamicFarDistance = 5000f;
-        public int DynamicFarStrideMultiplier = 2;
+        public int DynamicMidStride = 3;
+        public int DynamicOldStride = 8;
+        public float DynamicFarDistance = 3500f;
+        public int DynamicFarStrideMultiplier = 3;
+
+        // Destructive age-only culling is intentionally disabled. It removed optical depth and made
+        // the expanded trail sparse. The legacy keys are still parsed so old configs remain valid,
+        // but the renderer no longer deletes existing particles through this path.
+        public bool AdaptiveParticleCulling = false;
+        public float ParticleCullingStartAge = 0.35f;
+        public float ParticleCullingPower = 0.65f;
+        public float ParticleCullingMinimumKeep = 0.50f;
+
+        // Ordinary craft keep the full v0.6.1 density. Very large booster clusters share a bounded
+        // sampling budget; each retained sample receives Beer-Lambert optical-depth compensation.
+        public int FullDensityEmitterBudget = 8;
+        public float MinimumEmitterDensityScale = 0.35f;
 
         // Number of altitude samples used by the large-scale wind profile. Samples are interpolated
         // smoothly; the local spreading field is analytic and does not require extra Perlin calls.
-        public int WindCacheLayers = 128;
+        public int WindCacheLayers = 64;
 
         // KSP time warp / universal-time synchronization
         public bool FollowUniversalTime = true;
@@ -43,33 +64,39 @@ namespace PersistentSRBSmoke
         public float StockSmokeRefreshInterval = 0.75f;
 
         // Emission / continuity
-        public float BaseEmissionRate = 32f;
-        public float ParticlesPerMeter = 0.30f;
-        public float MaxParticleSpacing = 1.75f;
+        public float BaseEmissionRate = 52f;
+        public float ParticlesPerMeter = 1.10f;
+        public float MaxParticleSpacing = 0.55f;
         public float HighAltitudeSpacingMultiplier = 1.25f;
         public float ThinAtmosphereDensityFloor = 0.42f;
+        public float TimeEmissionFadeSpeed = 20f;
+
+        // Keep the large persistent cloud entirely behind the physical nozzle. The centre offset
+        // scales with its birth diameter and adds a small absolute clearance for tiny engines.
+        public float NozzleOffsetDiameters = 0.55f;
+        public float NozzleClearance = 5f;
 
         // Visual plume size
-        public float StartSize = 8.0f;
-        public float SizeGrowth = 18.0f;
+        public float StartSize = 24.0f;
+        public float SizeGrowth = 14.0f;
         public float HighAltitudeSizeMultiplier = 1.85f;
-        public float Opacity = 0.80f;
-        public float SmokeBrightness = 0.88f;
+        public float Opacity = 0.88f;
+        public float SmokeBrightness = 1.16f;
         public float EngineColorVariation = 0.05f;
 
         // Engine-dependent smoke scaling. KSP engine thrust is measured in kN.
         public bool EngineScalingEnabled = true;
         public float EngineMinThrust = 8f;
         public float EngineMaxThrust = 800f;
-        public float SmallEngineEmissionMultiplier = 0.18f;
+        public float SmallEngineEmissionMultiplier = 0.90f;
         public float LargeEngineEmissionMultiplier = 1.10f;
-        public float SmallEngineSizeMultiplier = 0.38f;
-        public float LargeEngineSizeMultiplier = 1.10f;
-        public float SmallEngineLifetimeMultiplier = 0.45f;
+        public float SmallEngineSizeMultiplier = 1.30f;
+        public float LargeEngineSizeMultiplier = 1.65f;
+        public float SmallEngineLifetimeMultiplier = 0.75f;
         public float LargeEngineLifetimeMultiplier = 1.00f;
-        public float SmallEngineOpacityMultiplier = 0.72f;
-        public float LargeEngineOpacityMultiplier = 1.00f;
-        public float SmallEngineSpacingMultiplier = 2.40f;
+        public float SmallEngineOpacityMultiplier = 0.95f;
+        public float LargeEngineOpacityMultiplier = 1.08f;
+        public float SmallEngineSpacingMultiplier = 1.00f;
         public float LargeEngineSpacingMultiplier = 0.95f;
 
         // Local cloud motion / diffusion. This remains independent of the prevailing wind so smoke
@@ -135,16 +162,27 @@ namespace PersistentSRBSmoke
                 settings.Lifetime = ReadFloat(node, "lifetime", settings.Lifetime, 5f, 600f);
                 settings.MaxEmitPerFrame = ReadInt(node, "maxEmitPerFrame", settings.MaxEmitPerFrame, 1, 2000);
                 settings.DynamicMotionHz = ReadFloat(node, "dynamicMotionHz", settings.DynamicMotionHz, 1f, 30f);
+                settings.OffscreenDynamicMotionHz = ReadFloat(node, "offscreenDynamicMotionHz", settings.OffscreenDynamicMotionHz, 0.1f, 10f);
                 settings.TeleportDistance = ReadFloat(node, "teleportDistance", settings.TeleportDistance, 10f, 10000f);
                 settings.EngineScanInterval = ReadFloat(node, "engineScanInterval", settings.EngineScanInterval, 0.25f, 30f);
                 settings.CloudletPlanes = ReadInt(node, "cloudletPlanes", settings.CloudletPlanes, 2, 6);
                 settings.SortParticles = ReadBool(node, "sortParticles", settings.SortParticles);
+                settings.PreferEveVolumetricShader = ReadBool(node, "preferEveVolumetricShader", settings.PreferEveVolumetricShader);
+                settings.VolumetricDensity = ReadFloat(node, "volumetricDensity", settings.VolumetricDensity, 0.05f, 4f);
+                settings.VolumetricMinScatter = ReadFloat(node, "volumetricMinScatter", settings.VolumetricMinScatter, 0f, 4f);
+                settings.VolumetricSoftDepth = ReadFloat(node, "volumetricSoftDepth", settings.VolumetricSoftDepth, 0.0001f, 0.1f);
                 settings.DynamicMidAge = ReadFloat(node, "dynamicMidAge", settings.DynamicMidAge, 0f, 0.95f);
                 settings.DynamicOldAge = ReadFloat(node, "dynamicOldAge", settings.DynamicOldAge, 0.01f, 1f);
                 settings.DynamicMidStride = ReadInt(node, "dynamicMidStride", settings.DynamicMidStride, 1, 16);
                 settings.DynamicOldStride = ReadInt(node, "dynamicOldStride", settings.DynamicOldStride, 1, 32);
                 settings.DynamicFarDistance = ReadFloat(node, "dynamicFarDistance", settings.DynamicFarDistance, 100f, 100000f);
                 settings.DynamicFarStrideMultiplier = ReadInt(node, "dynamicFarStrideMultiplier", settings.DynamicFarStrideMultiplier, 1, 16);
+                settings.AdaptiveParticleCulling = ReadBool(node, "adaptiveParticleCulling", settings.AdaptiveParticleCulling);
+                settings.ParticleCullingStartAge = ReadFloat(node, "particleCullingStartAge", settings.ParticleCullingStartAge, 0f, 0.8f);
+                settings.ParticleCullingPower = ReadFloat(node, "particleCullingPower", settings.ParticleCullingPower, 0.1f, 3f);
+                settings.ParticleCullingMinimumKeep = ReadFloat(node, "particleCullingMinimumKeep", settings.ParticleCullingMinimumKeep, 0.005f, 1f);
+                settings.FullDensityEmitterBudget = ReadInt(node, "fullDensityEmitterBudget", settings.FullDensityEmitterBudget, 1, 64);
+                settings.MinimumEmitterDensityScale = ReadFloat(node, "minimumEmitterDensityScale", settings.MinimumEmitterDensityScale, 0.05f, 1f);
                 settings.WindCacheLayers = ReadInt(node, "windCacheLayers", settings.WindCacheLayers, 8, 512);
 
                 settings.FollowUniversalTime = ReadBool(node, "followUniversalTime", settings.FollowUniversalTime);
@@ -157,6 +195,9 @@ namespace PersistentSRBSmoke
                 settings.MaxParticleSpacing = ReadFloat(node, "maxParticleSpacing", settings.MaxParticleSpacing, 0.25f, 25f);
                 settings.HighAltitudeSpacingMultiplier = ReadFloat(node, "highAltitudeSpacingMultiplier", settings.HighAltitudeSpacingMultiplier, 1f, 5f);
                 settings.ThinAtmosphereDensityFloor = ReadFloat(node, "thinAtmosphereDensityFloor", settings.ThinAtmosphereDensityFloor, 0f, 1f);
+                settings.TimeEmissionFadeSpeed = ReadFloat(node, "timeEmissionFadeSpeed", settings.TimeEmissionFadeSpeed, 1f, 300f);
+                settings.NozzleOffsetDiameters = ReadFloat(node, "nozzleOffsetDiameters", settings.NozzleOffsetDiameters, 0f, 3f);
+                settings.NozzleClearance = ReadFloat(node, "nozzleClearance", settings.NozzleClearance, 0f, 50f);
 
                 settings.StartSize = ReadFloat(node, "startSize", settings.StartSize, 0.1f, 100f);
                 settings.SizeGrowth = ReadFloat(node, "sizeGrowth", settings.SizeGrowth, 1f, 40f);

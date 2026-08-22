@@ -83,18 +83,17 @@ namespace PersistentSRBSmoke
 
             _cellSize = Mathf.Max(2f, _settings.PadCloudCellSize);
             float maxHeight = Mathf.Max(1f, _settings.PadCloudHeight);
+            float minimumRadius = Mathf.Max(1f, bodyRadius + surfaceReferenceAltitude - 8f);
+            float maximumRadius = Mathf.Max(minimumRadius, bodyRadius + surfaceReferenceAltitude + maxHeight);
+            float minimumRadiusSqr = minimumRadius * minimumRadius;
+            float maximumRadiusSqr = maximumRadius * maximumRadius;
 
             for (int i = 0; i < count; i++)
             {
                 ParticleSystem.Particle particle = particles[i];
                 Vector3 radial = particle.position - bodyCenter;
-                float radialMagnitude = radial.magnitude;
-                if (radialMagnitude < 1f)
-                    continue;
-
-                float altitude = Mathf.Max(0f, radialMagnitude - bodyRadius);
-                float height = altitude - surfaceReferenceAltitude;
-                if (height < -8f || height > maxHeight)
+                float radiusSqr = radial.sqrMagnitude;
+                if (radiusSqr < minimumRadiusSqr || radiusSqr > maximumRadiusSqr)
                     continue;
 
                 CellKey key = GetKey(particle.position);

@@ -2,6 +2,11 @@
 
 The current renderer intentionally remains compatible with a normal KSP plugin build: it uses Unity Shuriken mesh particles and runtime-generated textures. The next major renderer should replace old/distant cloudlets with chunked density volumes rather than making the existing transparent-particle system increasingly complex.
 
+The current compatibility bridge can reuse `EVE/GeometryCloudVolumeParticle` when an installed EVE
+version has already loaded that shader. It deliberately contains no EVE assets or binary reference
+and falls back to the standalone material. This improves cloudlet presentation and validates the
+material-selection path, but it is not a substitute for the bounded chunked raymarcher below.
+
 ## Target architecture
 
 ```text
@@ -87,6 +92,19 @@ The volumetric path should be designed around bounded work:
 - particle fallback for low-end hardware.
 
 The important constraint is that a five-minute trail must not cost five times as much to render as a one-minute trail. Old trail history should be merged/coarsened so cost approaches a configured ceiling.
+
+## Reference architecture findings
+
+The supplied EVE Volumetric Clouds preview was inspected read-only as an architectural reference.
+Its code and assets are All Rights Reserved and are not copied into this project. The relevant
+independently implementable ideas are temporal reconstruction from sparse new rays, adaptive
+distance-based ray steps, scene-depth interval clipping, a low-resolution time-sliced light volume,
+and a single reusable 3D Worley/Perlin shape texture. Reusing only EVE's particle material cannot
+provide those gains because the raymarched path depends on EVE's private off-screen compositor.
+
+For a thin, quickly moving launch trail, the first custom renderer should start conservatively with
+2x2 temporal reconstruction, preserve history depth/transmittance and increase the ray step only
+after the trail becomes small in screen space. The existing particle renderer remains the fallback.
 
 ## Why this is separate from the current optimization PR
 

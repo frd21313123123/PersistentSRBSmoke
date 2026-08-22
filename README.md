@@ -15,7 +15,10 @@ A from-scratch KSP 1.12.x plugin that creates persistent, expanding world-space 
 - Applies altitude-dependent wind shear and long-lived dynamic drift.
 - Uses a coarse near-pad density field for horizontal exhaust outflow and rising pad-cloud billows.
 - Suppresses stock/legacy SRB smoke while leaving flame and Waterfall effects alone.
-- Generates its smoke texture procedurally at runtime; no borrowed texture assets are required.
+- Generates a shape/detail smoke mask with edge erosion and Beer-Lambert-like density at runtime.
+- Automatically uses the cloud-volume particle shader from an installed EVE Volumetric Clouds;
+  no EVE binary, shader bundle or texture is copied or redistributed.
+- Falls back to the standalone procedural cloudlet renderer when EVE is absent or incompatible.
 
 ## Performance architecture
 
@@ -24,17 +27,20 @@ The current renderer is still particle-based, but the expensive parts are delibe
 - Wind Perlin noise is sampled into a configurable altitude cache once per dynamic update instead of being evaluated for every particle.
 - Old smoke is dynamically updated less often than fresh smoke.
 - Smoke farther than `dynamicFarDistance` receives an additional update-rate reduction.
+- Fully off-screen smoke time-slices wind/flow reevaluation while Unity keeps integrating velocity.
 - Dynamic LOD keeps the existing particle velocity between updates, so Unity continues integrating motion every frame.
 - The default cloudlet mesh uses three crossed transparent quads instead of six.
 - Particle distance sorting is disabled by default to avoid sorting tens of thousands of transparent cloudlets.
+- Particle renderers skip shadow, probe and motion-vector passes; mesh GPU instancing is enabled when the active shader supports it.
+- Large booster clusters share deposition samples with Beer-Lambert optical-depth compensation instead of producing thinner trails.
 - Reusable collections avoid repeated engine-scan allocations.
 - Stock-smoke component discovery is cached and deep reflection is no longer repeated every frame.
 
-The balanced defaults are currently `36000` maximum particles and `6 Hz` full dynamic updates. Increase them only after profiling your KSP install.
+The visual defaults restore the v0.6.1 trail (`48000` maximum particles and three cloudlet planes), while expensive dynamic motion runs at `4 Hz` and projected shadows at `8 Hz`.
 
 ## Current renderer limitation
 
-Persistent SRB Smoke does **not** yet use true volumetric raymarching. Each cloudlet is still a small crossed-quad mesh using an alpha-blended smoke texture. That means very dense trails can still become GPU-overdraw limited even after CPU-side optimizations.
+Persistent SRB Smoke does **not** yet have its own chunked raymarch renderer. With EVE installed it uses EVE's cloud-volume particle shader; without EVE each cloudlet remains a small crossed-quad mesh. Both paths now normalize crossed-plane transmittance in a Beer-Lambert style, so changing the plane count does not also change the trail's total opacity. Very dense fallback trails can still become GPU-overdraw limited.
 
 The planned next renderer replaces old/distant particle cloudlets with chunked density volumes and adds raymarched lighting, Beer-Lambert extinction, phase-function scattering, self-shadowing, depth-aware composition and temporal accumulation. See [`docs/VOLUMETRIC_ROADMAP.md`](docs/VOLUMETRIC_ROADMAP.md).
 
@@ -53,22 +59,36 @@ Edit:
 Important performance controls:
 
 ```cfg
-maxParticles = 36000
-dynamicMotionHz = 6
+maxParticles = 48000
+dynamicMotionHz = 4
+offscreenDynamicMotionHz = 0.5
 cloudletPlanes = 3
 sortParticles = false
 
+preferEveVolumetricShader = true
+volumetricDensity = 1.05
+volumetricMinScatter = 0.82
+volumetricSoftDepth = 0.008
+
 dynamicMidAge = 0.20
 dynamicOldAge = 0.55
-dynamicMidStride = 2
-dynamicOldStride = 4
-dynamicFarDistance = 5000
-dynamicFarStrideMultiplier = 2
+dynamicMidStride = 3
+dynamicOldStride = 8
+dynamicFarDistance = 3500
+dynamicFarStrideMultiplier = 3
 
-windCacheLayers = 96
+adaptiveParticleCulling = false
+fullDensityEmitterBudget = 8
+minimumEmitterDensityScale = 0.35
+windCacheLayers = 64
 ```
 
-For better FPS, reduce `maxParticles`, `lifetime`, `particlesPerMeter` and `dynamicMotionHz` first. If the GPU is the bottleneck, keep `cloudletPlanes = 3` and `sortParticles = false`.
+For better FPS, reduce `lifetime` or `maxParticles` first. Keep `adaptiveParticleCulling = false`: that legacy age-only path destroyed visible density. Large booster clusters are handled by compensated deposition budgeting instead.
+
+`preferEveVolumetricShader` does not install EVE or load files from the reference archive. It only
+uses EVE's shader registry when EVE is already installed. Windows/D3D11 uses the procedural fallback
+because EVE routes that shader through a private off-screen compositor which cannot accept Unity
+Shuriken. The selected mode and fallback reason are written to `KSP.log`.
 
 ## Build on Windows
 

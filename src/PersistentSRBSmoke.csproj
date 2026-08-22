@@ -67,6 +67,7 @@
 
   <ItemGroup>
     <Compile Include="PersistentSRBSmoke\PersistentSRBSmokeController.cs" />
+    <Compile Include="PersistentSRBSmoke\EveVolumetricMaterial.cs" />
     <Compile Include="PersistentSRBSmoke\NearNozzleSmokeLayer.cs" />
     <Compile Include="PersistentSRBSmoke\SmokeShadowLayer.cs" />
     <Compile Include="PersistentSRBSmoke\Settings.cs" />

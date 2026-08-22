@@ -9,15 +9,18 @@ namespace PersistentSRBSmoke
         private readonly SmokeSettings _settings;
         private readonly GameObject _gameObject;
         private readonly ParticleSystem _system;
+        private readonly ParticleSystemRenderer _renderer;
         private readonly ParticleSystem.Particle[] _particleBuffer;
         private readonly Material _material;
         private readonly Texture2D _texture;
         private readonly Mesh _cloudletMesh;
         private readonly PadCloudDensityField _padCloud;
+        private readonly bool _usesEveVolumetricShader;
         private bool _floatingOriginRegistered;
         private int _dynamicUpdateIndex;
 
         public int ParticleCount { get { return _system == null ? 0 : _system.particleCount; } }
+        public bool IsVisible { get { return _renderer != null && _renderer.isVisible; } }
 
         public SmokeParticlePool(SmokeSettings settings)
         {
@@ -31,17 +34,35 @@ namespace PersistentSRBSmoke
             _system = _gameObject.AddComponent<ParticleSystem>();
             ConfigureParticleSystem(_system);
 
-            ParticleSystemRenderer renderer = _gameObject.GetComponent<ParticleSystemRenderer>();
+            _renderer = _gameObject.GetComponent<ParticleSystemRenderer>();
             _texture = CreateSmokeTexture(160);
-            _material = CreateParticleMaterial(_texture);
+            string renderStatus;
+            Material volumetricMaterial;
+            if (EveVolumetricMaterial.TryCreate(_texture, _settings, out volumetricMaterial, out renderStatus))
+            {
+                _material = volumetricMaterial;
+                _usesEveVolumetricShader = true;
+            }
+            else
+            {
+                _material = CreateParticleMaterial(_texture);
+                _usesEveVolumetricShader = false;
+            }
             _cloudletMesh = CreateCloudletMesh(_settings.CloudletPlanes);
 
-            renderer.material = _material;
-            renderer.renderMode = ParticleSystemRenderMode.Mesh;
-            renderer.mesh = _cloudletMesh;
-            renderer.sortMode = _settings.SortParticles
+            _renderer.material = _material;
+            _renderer.renderMode = ParticleSystemRenderMode.Mesh;
+            _renderer.mesh = _cloudletMesh;
+            _renderer.sortMode = _settings.SortParticles
                 ? ParticleSystemSortMode.Distance
                 : ParticleSystemSortMode.None;
+            if (SystemInfo.supportsInstancing)
+                _material.enableInstancing = true;
+            ConfigureCheapRendererFeatures(_renderer);
+
+            Debug.Log(
+                "[PersistentSRBSmoke] Trail renderer: " +
+                (_usesEveVolumetricShader ? renderStatus : "procedural cloudlet fallback (" + renderStatus + ")"));
 
             try
             {
@@ -63,7 +84,8 @@ namespace PersistentSRBSmoke
             float atmosphericFactor,
             float scale,
             EngineSmokeProfile profile,
-            float heightAboveGround)
+            float heightAboveGround,
+            float opticalDepthScale)
         {
             if (_system == null || atmosphericFactor <= 0f)
                 return;
@@ -74,9 +96,14 @@ namespace PersistentSRBSmoke
             tangentA.Normalize();
             Vector3 tangentB = Vector3.Cross(up, tangentA).normalized;
 
-            float angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
+            // Nearby samples read the same smooth world-space direction field. Independent random
+            // angles made adjacent density samples fly apart immediately and revealed the particle
+            // lattice; coherent motion is much closer to advection of EVE's cloud density volume.
+            float coherentAngle = Mathf.Sin(position.x * 0.013f + position.y * 0.009f + position.z * 0.006f) * 2.15f
+                + Mathf.Sin(position.x * -0.005f + position.y * 0.011f + position.z * 0.017f) * 0.95f;
+            float angle = coherentAngle + UnityEngine.Random.Range(-0.10f, 0.10f);
             float smallEngineScatter = Mathf.Lerp(1.18f, 1.0f, profile.Strength);
-            float drift = UnityEngine.Random.Range(0.45f, 1.15f)
+            float drift = UnityEngine.Random.Range(0.94f, 1.06f)
                 * _settings.DriftSpeed
                 * smallEngineScatter;
             Vector3 sideways = (tangentA * Mathf.Cos(angle) + tangentB * Mathf.Sin(angle)) * drift;
@@ -95,24 +122,61 @@ namespace PersistentSRBSmoke
 
             float opacityFactor = Mathf.Pow(Mathf.Clamp01(atmosphericFactor), 0.32f);
 
-            float localBrightness = UnityEngine.Random.Range(0.88f, 1.06f);
+            // Broader tonal variation lets overlapping lobes read as illuminated bulges and
+            // recessed folds. The texture adds stable fine relief on top of this macro variation.
+            float localBrightness = UnityEngine.Random.Range(0.88f, 1.08f);
             Color smokeColor = new Color(
                 Mathf.Clamp01(profile.BaseColor.r * localBrightness),
                 Mathf.Clamp01(profile.BaseColor.g * localBrightness),
                 Mathf.Clamp01(profile.BaseColor.b * localBrightness),
                 1f);
 
-            smokeColor.a = Mathf.Clamp01(
+            float targetOpacity = Mathf.Clamp01(
                 _settings.Opacity
-                * 0.48f
                 * profile.OpacityMultiplier
                 * opacityFactor
-                * UnityEngine.Random.Range(0.88f, 1.08f));
+                * UnityEngine.Random.Range(0.98f, 1.02f));
+
+            // When many overlapping boosters share the deposition budget, preserve their optical
+            // mass instead of merely making every trail fainter. Beer-Lambert optical depth is
+            // additive, so one retained sample can faithfully represent several omitted samples.
+            float densityCompensation = Mathf.Clamp(opticalDepthScale, 1f, 4f);
+            targetOpacity = 1f - Mathf.Pow(1f - targetOpacity, densityCompensation);
 
             float altitudeExpansion = Mathf.Lerp(
                 _settings.HighAltitudeSizeMultiplier,
                 1f,
                 Mathf.Clamp01(atmosphericFactor));
+
+            float initialDiameter = _settings.StartSize
+                * scale
+                * profile.SizeMultiplier
+                * altitudeExpansion;
+            float depositionSpacing = _settings.MaxParticleSpacing
+                * Mathf.Lerp(_settings.HighAltitudeSpacingMultiplier, 1f, atmosphericFactor)
+                * profile.SpacingMultiplier;
+
+            // Treat the crossed planes as samples through one density volume. Beer-Lambert style
+            // integration includes both crossed planes and the overlapping samples deposited along
+            // the trail. This is the particle equivalent of integrating a continuous cloud density
+            // field: no individual sample is allowed to become an opaque white bead.
+            float spatialOverlap = Mathf.Clamp(
+                initialDiameter / Mathf.Max(0.25f, depositionSpacing) * 0.55f,
+                1f,
+                8f);
+
+            // Crossed quads and neighbouring samples are correlated views of the same density
+            // body, not dozens of independent full-opacity slabs. The old linear division made
+            // the outer 80% of a large cloudlet effectively invisible. Sublinear normalization
+            // retains continuous Beer-Lambert accumulation while exposing the full plume width.
+            float opticalSamples = Mathf.Clamp(
+                Mathf.Pow(spatialOverlap, 0.42f)
+                * (_usesEveVolumetricShader
+                    ? 1f
+                    : Mathf.Pow(Mathf.Max(1, _settings.CloudletPlanes), 0.35f)),
+                1f,
+                5f);
+            smokeColor.a = 1f - Mathf.Pow(1f - targetOpacity, 1f / opticalSamples);
 
             var emit = new ParticleSystem.EmitParams();
             emit.position = position;
@@ -120,13 +184,20 @@ namespace PersistentSRBSmoke
             emit.startLifetime = _settings.Lifetime
                 * profile.LifetimeMultiplier
                 * UnityEngine.Random.Range(0.90f, 1.10f);
-            emit.startSize = _settings.StartSize
+            float cloudletSize = _settings.StartSize
                 * scale
                 * profile.SizeMultiplier
                 * altitudeExpansion
-                * UnityEngine.Random.Range(0.82f, 1.24f);
+                * UnityEngine.Random.Range(0.78f, 1.30f);
+            emit.startSize3D = new Vector3(
+                cloudletSize * UnityEngine.Random.Range(0.82f, 1.22f),
+                cloudletSize * UnityEngine.Random.Range(0.82f, 1.22f),
+                cloudletSize * UnityEngine.Random.Range(0.82f, 1.22f));
             emit.startColor = smokeColor;
-            emit.rotation = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
+            emit.rotation3D = new Vector3(
+                UnityEngine.Random.Range(0f, Mathf.PI * 2f),
+                UnityEngine.Random.Range(0f, Mathf.PI * 2f),
+                UnityEngine.Random.Range(-0.35f, 0.35f));
             _system.Emit(emit, 1);
         }
 
@@ -217,11 +288,6 @@ namespace PersistentSRBSmoke
             {
                 ParticleSystem.Particle particle = _particleBuffer[i];
 
-                Vector3 radial = particle.position - bodyCenter;
-                float radialMagnitude = radial.magnitude;
-                if (radialMagnitude < 1f)
-                    continue;
-
                 float age = particle.startLifetime <= 0.001f
                     ? 0f
                     : Mathf.Clamp01(1f - particle.remainingLifetime / particle.startLifetime);
@@ -233,6 +299,13 @@ namespace PersistentSRBSmoke
                     if (((_dynamicUpdateIndex + phase) % updateStride) != 0)
                         continue;
                 }
+
+                // The majority of old/far particles leave through the stride check above. Delay
+                // square roots and all surface-space work until a particle is actually scheduled.
+                Vector3 radial = particle.position - bodyCenter;
+                float radialMagnitude = radial.magnitude;
+                if (radialMagnitude < 1f)
+                    continue;
 
                 Vector3 up = radial / radialMagnitude;
                 float altitude = Mathf.Max(0f, radialMagnitude - bodyRadius);
@@ -248,12 +321,14 @@ namespace PersistentSRBSmoke
                 tangentA.Normalize();
                 Vector3 tangentB = Vector3.Cross(up, tangentA).normalized;
 
-                // Cheap deterministic curl-like wobble. This replaces a Mathf.PerlinNoise call for
-                // every particle while preserving coherent, seed-stable divergence over lifetime.
+                // Cheap continuous curl-like field. World position supplies the macro direction so
+                // neighbouring samples advect together; the seed contributes only a little detail.
+                // A fully seed-random direction turns a continuous trail back into isolated puffs.
                 float seed = HashToUnit(particle.randomSeed);
-                float wobble = Mathf.Sin(seed * 37.1f + age * 13.2f) * 0.46f
-                    + Mathf.Sin(seed * 91.7f - age * 7.3f) * 0.21f;
-                float angle = seed * Mathf.PI * 2f + wobble;
+                Vector3 fieldPosition = radial * 0.010f;
+                float angle = Mathf.Sin(fieldPosition.x + fieldPosition.y * 0.73f + age * 2.1f) * 2.05f
+                    + Mathf.Sin(fieldPosition.z * 1.31f - fieldPosition.x * 0.47f - age * 1.3f) * 1.10f
+                    + (seed - 0.5f) * 0.26f;
                 Vector3 divergenceDirection = tangentA * Mathf.Cos(angle) + tangentB * Mathf.Sin(angle);
 
                 float sourceScale = Mathf.Clamp(
@@ -333,6 +408,8 @@ namespace PersistentSRBSmoke
             main.startSpeed = 0f;
             main.startLifetime = _settings.Lifetime;
             main.startSize = _settings.StartSize;
+            main.startSize3D = true;
+            main.startRotation3D = true;
             main.gravityModifier = 0f;
 
             var emission = system.emission;
@@ -344,13 +421,7 @@ namespace PersistentSRBSmoke
             var size = system.sizeOverLifetime;
             size.enabled = true;
             float g = Mathf.Max(1f, _settings.SizeGrowth);
-            AnimationCurve expansion = new AnimationCurve(
-                new Keyframe(0.00f, 1.00f, 5.0f, 5.0f),
-                new Keyframe(0.04f, 1.55f, 7.0f, 7.0f),
-                new Keyframe(0.10f, Mathf.Min(g, 3.4f), 10.0f, 10.0f),
-                new Keyframe(0.22f, Mathf.Min(g, 7.0f), 9.0f, 9.0f),
-                new Keyframe(0.45f, Mathf.Min(g, 12.0f), 5.0f, 5.0f),
-                new Keyframe(1.00f, g, 0.5f, 0f));
+            AnimationCurve expansion = CreateSmoothExpansionCurve(g);
             size.size = new ParticleSystem.MinMaxCurve(1f, expansion);
 
             var color = system.colorOverLifetime;
@@ -374,14 +445,58 @@ namespace PersistentSRBSmoke
                 });
             color.color = new ParticleSystem.MinMaxGradient(gradient);
 
+            // Four independently generated billow projections prevent the enlarged plume from
+            // revealing a repeated circular sprite. Each particle keeps one random atlas frame.
+            var textureSheet = system.textureSheetAnimation;
+            textureSheet.enabled = true;
+            textureSheet.mode = ParticleSystemAnimationMode.Grid;
+            textureSheet.numTilesX = 2;
+            textureSheet.numTilesY = 2;
+            textureSheet.animation = ParticleSystemAnimationType.WholeSheet;
+            textureSheet.frameOverTime = new ParticleSystem.MinMaxCurve(0f);
+            textureSheet.startFrame = new ParticleSystem.MinMaxCurve(0f, 0.999f);
+            textureSheet.cycleCount = 1;
+
+            // DynamicMotion already supplies coherent turbulence and wind. Unity's per-particle
+            // noise module repeats similar work every simulation frame for the full pool, so it is
+            // deliberately disabled for the persistent layer.
             var noise = system.noise;
-            noise.enabled = _settings.TurbulenceStrength > 0.001f;
-            noise.quality = ParticleSystemNoiseQuality.Medium;
-            noise.strength = _settings.TurbulenceStrength;
-            noise.frequency = _settings.TurbulenceFrequency;
-            noise.scrollSpeed = 0.10f;
-            noise.damping = true;
-            noise.octaveCount = 2;
+            noise.enabled = false;
+        }
+
+        private static AnimationCurve CreateSmoothExpansionCurve(float growth)
+        {
+            // A sampled exponential has a continuous value and derivative everywhere. The former
+            // handful of hand-tuned keys changed slope abruptly; because particle age maps almost
+            // directly to distance behind an accelerating rocket, those corners looked like
+            // separate speed/height bands in a long trail.
+            const int sampleCount = 25;
+            const float response = 0.25f;
+            const float birthScale = 0.60f;
+            float denominator = 1f - Mathf.Exp(-1f / response);
+            Keyframe[] keys = new Keyframe[sampleCount];
+            for (int i = 0; i < sampleCount; i++)
+            {
+                float t = i / (float)(sampleCount - 1);
+                float exponential = Mathf.Exp(-t / response);
+                float normalized = (1f - exponential) / denominator;
+                float value = birthScale + (growth - birthScale) * normalized;
+                float tangent = (growth - birthScale) * exponential / (response * denominator);
+                keys[i] = new Keyframe(t, value, tangent, tangent);
+            }
+
+            return new AnimationCurve(keys);
+        }
+
+        private static float EvaluateSmoothExpansion(float age, float growth)
+        {
+            const float response = 0.25f;
+            const float birthScale = 0.60f;
+            age = Mathf.Clamp01(age);
+            growth = Mathf.Max(1f, growth);
+            float denominator = 1f - Mathf.Exp(-1f / response);
+            float normalized = (1f - Mathf.Exp(-age / response)) / denominator;
+            return birthScale + (growth - birthScale) * normalized;
         }
 
         private static Mesh CreateCloudletMesh(int requestedPlanes)
@@ -399,6 +514,8 @@ namespace PersistentSRBSmoke
             int planeCount = Mathf.Clamp(requestedPlanes, 2, normals.Length);
             var vertices = new List<Vector3>(planeCount * 4);
             var uvs = new List<Vector2>(planeCount * 4);
+            var meshNormals = new List<Vector3>(planeCount * 4);
+            var tangents = new List<Vector4>(planeCount * 4);
             var triangles = new List<int>(planeCount * 6);
 
             for (int i = 0; i < planeCount; i++)
@@ -422,6 +539,13 @@ namespace PersistentSRBSmoke
                 uvs.Add(new Vector2(1f, 1f));
                 uvs.Add(new Vector2(0f, 1f));
 
+                Vector4 tangent = new Vector4(axisA.x, axisA.y, axisA.z, 1f);
+                for (int vertex = 0; vertex < 4; vertex++)
+                {
+                    meshNormals.Add(normal);
+                    tangents.Add(tangent);
+                }
+
                 triangles.Add(baseIndex + 0);
                 triangles.Add(baseIndex + 1);
                 triangles.Add(baseIndex + 2);
@@ -434,6 +558,8 @@ namespace PersistentSRBSmoke
             mesh.name = "PersistentSRBSmoke.RuntimeCloudlet";
             mesh.SetVertices(vertices);
             mesh.SetUVs(0, uvs);
+            mesh.SetNormals(meshNormals);
+            mesh.SetTangents(tangents);
             mesh.SetTriangles(triangles, 0);
             mesh.RecalculateBounds();
             return mesh;
@@ -467,38 +593,125 @@ namespace PersistentSRBSmoke
             return material;
         }
 
-        private static Texture2D CreateSmokeTexture(int size)
+        private static void ConfigureCheapRendererFeatures(ParticleSystemRenderer renderer)
         {
-            Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false, true);
-            texture.name = "PersistentSRBSmoke.RuntimeTexture";
+            if (renderer == null)
+                return;
+
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            renderer.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
+            renderer.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
+            renderer.motionVectorGenerationMode = MotionVectorGenerationMode.ForceNoMotion;
+            renderer.allowOcclusionWhenDynamic = true;
+
+            // Mesh particles are submitted as one repeated cloudlet mesh. Compatible shaders can
+            // use Unity's instanced path; incompatible legacy shaders safely retain normal batching.
+            renderer.enableGPUInstancing = SystemInfo.supportsInstancing;
+        }
+
+        private static Texture2D CreateSmokeTexture(int tileSize)
+        {
+            const int tilesPerAxis = 2;
+            int atlasSize = tileSize * tilesPerAxis;
+            Texture2D texture = new Texture2D(atlasSize, atlasSize, TextureFormat.RGBA32, false, true);
+            texture.name = "PersistentSRBSmoke.RuntimeReliefAtlas";
             texture.wrapMode = TextureWrapMode.Clamp;
             texture.filterMode = FilterMode.Bilinear;
 
-            float seedX = UnityEngine.Random.Range(10f, 1000f);
-            float seedY = UnityEngine.Random.Range(10f, 1000f);
-            for (int y = 0; y < size; y++)
+            Vector3 lightDirection = new Vector3(-0.46f, 0.66f, 0.59f).normalized;
+            for (int tile = 0; tile < tilesPerAxis * tilesPerAxis; tile++)
             {
-                for (int x = 0; x < size; x++)
+                float seedX = UnityEngine.Random.Range(10f, 1000f) + tile * 71.3f;
+                float seedY = UnityEngine.Random.Range(10f, 1000f) + tile * 39.7f;
+                float[,] density = new float[tileSize, tileSize];
+                float[,] radius = new float[tileSize, tileSize];
+
+                // First pass builds one continuous projected density body. Strong fBm changes its
+                // silhouette and interior height without punching the transparent holes that made
+                // the older trail disintegrate into beads.
+                for (int y = 0; y < tileSize; y++)
                 {
-                    float u = (x + 0.5f) / size * 2f - 1f;
-                    float v = (y + 0.5f) / size * 2f - 1f;
-                    float radius = Mathf.Sqrt(u * u + v * v);
-                    float radial = Mathf.Clamp01(1f - radius);
-                    radial = radial * radial * (3f - 2f * radial);
+                    for (int x = 0; x < tileSize; x++)
+                    {
+                        float u = (x + 0.5f) / tileSize * 2f - 1f;
+                        float v = (y + 0.5f) / tileSize * 2f - 1f;
+                        float warpedRadius;
+                        density[x, y] = EvaluateCloudDensity(u, v, seedX, seedY, out warpedRadius);
+                        radius[x, y] = warpedRadius;
+                    }
+                }
 
-                    float n1 = Mathf.PerlinNoise(seedX + u * 2.1f, seedY + v * 2.1f);
-                    float n2 = Mathf.PerlinNoise(seedX * 0.37f + u * 5.3f, seedY * 0.37f + v * 5.3f);
-                    float n3 = Mathf.PerlinNoise(seedX * 0.13f + u * 10.7f, seedY * 0.13f + v * 10.7f);
-                    float noise = Mathf.Clamp01(n1 * 0.58f + n2 * 0.29f + n3 * 0.13f);
-                    float alpha = Mathf.Pow(radial, 0.64f) * Mathf.Lerp(0.36f, 1f, noise);
-                    alpha = Mathf.Clamp01((alpha - 0.018f) * 1.16f);
+                int tileX = (tile % tilesPerAxis) * tileSize;
+                int tileY = (tile / tilesPerAxis) * tileSize;
+                for (int y = 0; y < tileSize; y++)
+                {
+                    int ym = Mathf.Max(0, y - 1);
+                    int yp = Mathf.Min(tileSize - 1, y + 1);
+                    for (int x = 0; x < tileSize; x++)
+                    {
+                        int xm = Mathf.Max(0, x - 1);
+                        int xp = Mathf.Min(tileSize - 1, x + 1);
+                        float centre = density[x, y];
+                        float left = density[xm, y];
+                        float right = density[xp, y];
+                        float down = density[x, ym];
+                        float up = density[x, yp];
 
-                    texture.SetPixel(x, y, new Color(1f, 1f, 1f, alpha));
+                        // Treat projected density as a height field. Its gradient supplies stable
+                        // directional lighting and curvature darkens folds, producing visible
+                        // cauliflower relief even with KSP's unlit fallback particle shader.
+                        float dx = (right - left) * tileSize * 0.34f;
+                        float dy = (up - down) * tileSize * 0.34f;
+                        Vector3 normal = new Vector3(-dx, -dy, 1f).normalized;
+                        float diffuse = Mathf.Max(0f, Vector3.Dot(normal, lightDirection));
+                        float curvature = (centre * 4f - left - right - down - up) * tileSize * 0.45f;
+                        float body = Mathf.Clamp01(centre / 1.15f);
+                        float shade = Mathf.Clamp(
+                            0.56f + diffuse * 0.39f + curvature * 0.10f + body * 0.07f,
+                            0.48f,
+                            1.00f);
+
+                        float alpha = 1f - Mathf.Exp(-centre * 2.85f);
+                        alpha *= 1f - Mathf.SmoothStep(0.88f, 1.06f, radius[x, y]);
+                        texture.SetPixel(
+                            tileX + x,
+                            tileY + y,
+                            new Color(shade, shade * 0.985f, shade * 0.95f, alpha));
+                    }
                 }
             }
 
             texture.Apply(false, true);
             return texture;
+        }
+
+        private static float EvaluateCloudDensity(
+            float u,
+            float v,
+            float seedX,
+            float seedY,
+            out float warpedRadius)
+        {
+            float rawRadius = Mathf.Sqrt(u * u + v * v);
+            float warpX = Mathf.PerlinNoise(seedX + u * 1.25f, seedY + v * 1.25f) - 0.5f;
+            float warpY = Mathf.PerlinNoise(seedY + u * 1.25f, seedX - v * 1.25f) - 0.5f;
+            float wu = u + warpX * 0.24f;
+            float wv = v + warpY * 0.24f;
+
+            float n1 = Mathf.PerlinNoise(seedX + wu * 1.75f, seedY + wv * 1.75f);
+            float n2 = Mathf.PerlinNoise(seedX * 0.37f + wu * 4.6f, seedY * 0.37f + wv * 4.6f);
+            float n3 = Mathf.PerlinNoise(seedX * 0.13f + wu * 10.8f, seedY * 0.13f + wv * 10.8f);
+            float shapeNoise = Mathf.Clamp01(n1 * 0.58f + n2 * 0.30f + n3 * 0.12f);
+            float detailNoise = Mathf.PerlinNoise(seedY * 0.23f + wu * 18.7f, seedX * 0.23f + wv * 18.7f);
+
+            float boundaryWeight = Mathf.SmoothStep(0.18f, 1f, rawRadius);
+            float billowOffset = (shapeNoise - 0.5f) * 0.38f * boundaryWeight;
+            warpedRadius = Mathf.Max(0f, rawRadius + billowOffset);
+            float sphereDepth = Mathf.Sqrt(Mathf.Clamp01(1f - warpedRadius * warpedRadius));
+            float interiorDetail = Mathf.Lerp(0.58f, 1.28f, detailNoise);
+            float macroDensity = Mathf.Lerp(0.82f, 1.20f, shapeNoise);
+            return sphereDepth * interiorDetail * macroDensity;
         }
 
         public void Dispose()

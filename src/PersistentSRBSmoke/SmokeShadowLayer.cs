@@ -19,9 +19,9 @@ namespace PersistentSRBSmoke
         private sealed class ShadowSettings
         {
             public bool Enabled = true;
-            public float UpdateHz = 0f;
-            public int MaxQuads = 1800;
-            public int SampleStride = 8;
+            public float UpdateHz = 8f;
+            public int MaxQuads = 900;
+            public int SampleStride = 12;
             public float MaxAltitude = 14000f;
             public float Opacity = 0.18f;
             public float SizeMultiplier = 1.55f;
@@ -30,11 +30,11 @@ namespace PersistentSRBSmoke
             public float SurfaceOffset = 4.0f;
             public float MinSourceAlpha = 0.025f;
             public float MinSunDot = 0.055f;
-            public int TerrainQueriesPerFrame = 32;
+            public int TerrainQueriesPerFrame = 16;
             public float TerrainCacheMeters = 220f;
             public int TerrainCacheCapacity = 12000;
-            public float SizeGrowth = 18.0f;
-            public int SourceMaxParticles = 36000;
+            public float SizeGrowth = 14.0f;
+            public int SourceMaxParticles = 48000;
             public bool DebugLogging = false;
 
             public static ShadowSettings Load()
@@ -224,6 +224,11 @@ namespace PersistentSRBSmoke
             _texture = CreateShadowTexture(96);
             _material = CreateShadowMaterial(_texture);
             _meshRenderer.sharedMaterial = _material;
+            _meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            _meshRenderer.receiveShadows = false;
+            _meshRenderer.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
+            _meshRenderer.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
+            _meshRenderer.motionVectorGenerationMode = MotionVectorGenerationMode.ForceNoMotion;
         }
 
         private void UpdateShadowMesh(CelestialBody body, CelestialBody sun)
@@ -241,6 +246,10 @@ namespace PersistentSRBSmoke
             EnsureParentBody(body);
 
             Vector3 bodyCenter = body.transform.position;
+            float bodyRadius = (float)body.Radius;
+            float maximumSourceRadius = bodyRadius + _settings.MaxAltitude;
+            float bodyRadiusSqr = bodyRadius * bodyRadius;
+            float maximumSourceRadiusSqr = maximumSourceRadius * maximumSourceRadius;
             Vector3 sunPosition = sun.transform.position;
             Vector3 lightTravelDirection = bodyCenter - sunPosition;
             if (lightTravelDirection.sqrMagnitude < 1f)
@@ -277,13 +286,12 @@ namespace PersistentSRBSmoke
                     continue;
 
                 Vector3 radial = particle.position - bodyCenter;
-                float radialMagnitude = radial.magnitude;
-                if (radialMagnitude <= body.Radius)
+                float radialSqrMagnitude = radial.sqrMagnitude;
+                if (radialSqrMagnitude <= bodyRadiusSqr || radialSqrMagnitude > maximumSourceRadiusSqr)
                     continue;
 
-                float altitude = radialMagnitude - (float)body.Radius;
-                if (altitude > _settings.MaxAltitude)
-                    continue;
+                float radialMagnitude = radial.magnitude;
+                float altitude = radialMagnitude - bodyRadius;
 
                 float age = Mathf.Clamp01(1f - particle.remainingLifetime / particle.startLifetime);
                 Color32 startColor = particle.startColor;
@@ -627,19 +635,11 @@ namespace PersistentSRBSmoke
         {
             age = Mathf.Clamp01(age);
             growth = Mathf.Max(1f, growth);
-            float k1 = Mathf.Min(growth, 3.4f);
-            float k2 = Mathf.Min(growth, 7.0f);
-            float k3 = Mathf.Min(growth, 12.0f);
-
-            if (age <= 0.04f)
-                return Mathf.Lerp(1.00f, 1.55f, Mathf.SmoothStep(0f, 1f, age / 0.04f));
-            if (age <= 0.10f)
-                return Mathf.Lerp(1.55f, k1, Mathf.SmoothStep(0f, 1f, (age - 0.04f) / 0.06f));
-            if (age <= 0.22f)
-                return Mathf.Lerp(k1, k2, Mathf.SmoothStep(0f, 1f, (age - 0.10f) / 0.12f));
-            if (age <= 0.45f)
-                return Mathf.Lerp(k2, k3, Mathf.SmoothStep(0f, 1f, (age - 0.22f) / 0.23f));
-            return Mathf.Lerp(k3, growth, Mathf.SmoothStep(0f, 1f, (age - 0.45f) / 0.55f));
+            const float response = 0.25f;
+            const float birthScale = 0.60f;
+            float denominator = 1f - Mathf.Exp(-1f / response);
+            float normalized = (1f - Mathf.Exp(-age / response)) / denominator;
+            return birthScale + (growth - birthScale) * normalized;
         }
 
         private static uint Hash32(uint value)

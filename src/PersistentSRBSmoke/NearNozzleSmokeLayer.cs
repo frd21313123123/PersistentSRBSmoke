@@ -29,7 +29,7 @@ namespace PersistentSRBSmoke
             public float InitialSpeed = 12.0f;
             public float VelocityInheritance = 0.97f;
             public float SpreadSpeed = 1.10f;
-            public float Offset = 0.25f;
+            public float Offset = 2.50f;
             public float RadialJitter = 0.12f;
             public float Turbulence = 0.52f;
             public float TurbulenceFrequency = 0.12f;
@@ -310,7 +310,7 @@ namespace PersistentSRBSmoke
             }
         }
 
-        private static Vector3 ResolveExhaustDirection(ModuleEngines engine, Transform exhaust, Vessel vessel)
+        internal static Vector3 ResolveExhaustDirection(ModuleEngines engine, Transform exhaust, Vessel vessel)
         {
             Vector3 fallback = Vector3.down;
             if (vessel != null)
@@ -501,6 +501,7 @@ namespace PersistentSRBSmoke
             renderer.material = _material;
             renderer.renderMode = ParticleSystemRenderMode.Billboard;
             renderer.sortMode = ParticleSystemSortMode.Distance;
+            ConfigureCheapRendererFeatures(renderer);
 
             try
             {
@@ -571,6 +572,18 @@ namespace PersistentSRBSmoke
             noise.scrollSpeed = 0.14f;
             noise.damping = true;
             noise.octaveCount = 2;
+        }
+
+        private static void ConfigureCheapRendererFeatures(ParticleSystemRenderer renderer)
+        {
+            if (renderer == null)
+                return;
+
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
+            renderer.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
+            renderer.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
+            renderer.motionVectorGenerationMode = MotionVectorGenerationMode.ForceNoMotion;
         }
 
         private static Material CreateParticleMaterial(Texture2D texture)
