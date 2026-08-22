@@ -249,7 +249,7 @@ namespace PersistentSRBSmoke
                     : version.Major + "." + version.Minor + "." + version.Build;
                 Debug.Log(
                     "[PersistentSRBSmoke] v" + versionText +
-                    " initialized with cached wind, time-sliced light volume, dynamic LOD, UT time-warp sync, pad hold and stock-smoke suppression.");
+                    " initialized with bounded Waterfall analytic volumes, cached wind, time-sliced light volume, dynamic LOD, UT time-warp sync, pad hold and stock-smoke suppression.");
             }
             catch (Exception ex)
             {
@@ -326,6 +326,11 @@ namespace PersistentSRBSmoke
             else if (!_settings.FollowUniversalTime)
                 _pendingDynamicGameTime += unityDt;
 
+            // Advance the authoritative Shuriken simulation before taking the next volumetric
+            // snapshot. Both paths then observe the same Universal Time during rails/physics warp.
+            if (_settings.FollowUniversalTime)
+                _smoke.AdvanceUniversalTime(gameDt, unityDt);
+
             float now = Time.realtimeSinceStartup;
             // EVE obtains much of its speed by time-slicing work that is not currently visible.
             // Apply the same safe principle to simulation: off-screen smoke keeps Unity velocity
@@ -353,9 +358,6 @@ namespace PersistentSRBSmoke
                 _nextDynamicMotion = now + dynamicInterval;
             }
 
-            if (_settings.FollowUniversalTime)
-                _smoke.AdvanceUniversalTime(gameDt, unityDt);
-
             if (_settings.DebugLogging && now >= _nextDebugLog)
             {
                 float warpRatio = unityDt > 0.0001f ? gameDt / unityDt : 0f;
@@ -370,6 +372,9 @@ namespace PersistentSRBSmoke
 
         private void LateUpdate()
         {
+            if (_smoke != null && HighLogic.LoadedSceneIsFlight)
+                _smoke.LateUpdateVolumetrics();
+
             if (_stockSmokeSuppressor == null || !_settings.SuppressStockSmoke || !HighLogic.LoadedSceneIsFlight)
                 return;
 

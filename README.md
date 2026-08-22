@@ -16,6 +16,8 @@ A from-scratch KSP 1.12.x plugin that creates persistent, expanding world-space 
 - Uses a coarse near-pad density field for horizontal exhaust outflow and rising pad-cloud billows.
 - Suppresses stock/legacy SRB smoke while leaving flame and Waterfall effects alone.
 - Generates a shape/detail smoke mask with edge erosion and Beer-Lambert-like density at runtime.
+- When Waterfall is installed, condenses the particle simulation into a bounded set of analytic
+  proxy volumes using the same renderer architecture exposed by VolumetricVaporCones.
 - Uses an independent EVE-inspired light volume for sunlight extinction, dense-core self-shadowing,
   ambient multiple scattering, sunset tint and restrained forward/backward phase scattering.
 - Automatically uses the cloud-volume particle shader from an installed EVE Volumetric Clouds;
@@ -37,14 +39,25 @@ The current renderer is still particle-based, but the expensive parts are delibe
 - Large booster clusters share deposition samples with Beer-Lambert optical-depth compensation instead of producing thinner trails.
 - Direct and ambient smoke lighting are cached per spatial cell and refreshed in separate time slices;
   particles sample the cache instead of each marching toward the Sun.
+- The optional Waterfall layer condenses up to `48000` simulation particles into at most `96`
+  analytic volumes, so its proxy count does not grow with the number of active boosters.
 - Reusable collections avoid repeated engine-scan allocations.
 - Stock-smoke component discovery is cached and deep reflection is no longer repeated every frame.
 
 The visual defaults restore the v0.6.1 trail (`48000` maximum particles and three cloudlet planes), while expensive dynamic motion runs at `4 Hz` and projected shadows at `8 Hz`.
 
-## Current renderer limitation
+## Renderer architecture
 
-Persistent SRB Smoke does **not** yet have its own chunked view-ray renderer. With EVE installed it can select a compatible cloud-volume particle shader; without EVE each cloudlet remains a small crossed-quad mesh. The standalone path now has a coarse time-sliced light volume, but this is still particle-colour lighting rather than per-pixel volumetric raymarching. Very dense fallback trails can remain GPU-overdraw limited.
+`VolumetricVaporCones` does not contain a renderer of its own; it configures Waterfall's
+`Additive (Volumetric)` shader. Persistent SRB Smoke now detects that already-loaded shader and
+proxy model at runtime, groups smoke into body-relative cells, and renders a bounded analytic volume
+for every retained cell. The normal Shuriken system remains authoritative for motion, time warp and
+projected shadows, and is the automatic fallback when Waterfall is absent.
+
+The default overlay retains a reduced-opacity particle shell because Waterfall's shader is additive
+and was designed for vapor/plumes rather than fully opaque grey smoke. Set
+`waterfallVolumetricReplaceParticles = true` for the faster pure analytic presentation. No Waterfall
+shader, model, texture, DLL or VolumetricVaporCones file is copied into this mod.
 
 The planned next renderer replaces old/distant particle cloudlets with chunked density volumes and adds raymarched lighting, Beer-Lambert extinction, phase-function scattering, self-shadowing, depth-aware composition and temporal accumulation. See [`docs/VOLUMETRIC_ROADMAP.md`](docs/VOLUMETRIC_ROADMAP.md).
 
@@ -74,6 +87,13 @@ volumetricDensity = 1.05
 volumetricMinScatter = 0.82
 volumetricSoftDepth = 0.008
 
+waterfallVolumetricEnabled = true
+waterfallVolumetricReplaceParticles = false
+waterfallVolumetricMaxVolumes = 96
+waterfallVolumetricCellSize = 72
+waterfallVolumetricBrightness = 0.65
+waterfallParticleShellOpacity = 0.55
+
 dynamicMidAge = 0.20
 dynamicOldAge = 0.55
 dynamicMidStride = 3
@@ -99,6 +119,11 @@ For better FPS, reduce `lifetime` or `maxParticles` first. Keep `adaptiveParticl
 uses EVE's shader registry when EVE is already installed. Windows/D3D11 uses the procedural fallback
 because EVE routes that shader through a private off-screen compositor which cannot accept Unity
 Shuriken. The selected mode and fallback reason are written to `KSP.log`.
+
+The Waterfall bridge is optional and uses assets from the user's installed Waterfall at runtime.
+The architecture was investigated through
+[VolumetricVaporCones](https://github.com/huj31415/VolumetricVaporCones) (MIT) and
+[Waterfall](https://github.com/post-kerbin-mining-corporation/Waterfall) (CC BY-NC-SA 4.0).
 
 ## Build on Windows
 

@@ -29,6 +29,19 @@ namespace PersistentSRBSmoke
         public float VolumetricMinScatter = 0.82f;
         public float VolumetricSoftDepth = 0.008f;
 
+        // Optional runtime bridge to the analytic proxy volume used by VolumetricVaporCones.
+        // Waterfall supplies the shader/model from its own installation; no third-party asset is
+        // included in this mod. A fixed proxy budget prevents the particle count from becoming a
+        // matching number of expensive transparent volumes.
+        public bool WaterfallVolumetricEnabled = true;
+        public bool WaterfallVolumetricReplaceParticles = false;
+        public int WaterfallVolumetricMaxVolumes = 96;
+        public float WaterfallVolumetricCellSize = 72f;
+        public float WaterfallVolumetricBrightness = 0.65f;
+        public float WaterfallVolumetricSizeMultiplier = 1.08f;
+        public float WaterfallVolumetricNoise = 6.5f;
+        public float WaterfallParticleShellOpacity = 0.55f;
+
         // EVE-inspired, independently implemented light volume. Optical depth is accumulated into
         // coarse body-relative cells; direct and ambient lighting are refreshed in separate slices.
         public bool LightVolumeEnabled = true;
@@ -190,6 +203,14 @@ namespace PersistentSRBSmoke
                 settings.VolumetricDensity = ReadFloat(node, "volumetricDensity", settings.VolumetricDensity, 0.05f, 4f);
                 settings.VolumetricMinScatter = ReadFloat(node, "volumetricMinScatter", settings.VolumetricMinScatter, 0f, 4f);
                 settings.VolumetricSoftDepth = ReadFloat(node, "volumetricSoftDepth", settings.VolumetricSoftDepth, 0.0001f, 0.1f);
+                settings.WaterfallVolumetricEnabled = ReadBool(node, "waterfallVolumetricEnabled", settings.WaterfallVolumetricEnabled);
+                settings.WaterfallVolumetricReplaceParticles = ReadBool(node, "waterfallVolumetricReplaceParticles", settings.WaterfallVolumetricReplaceParticles);
+                settings.WaterfallVolumetricMaxVolumes = ReadInt(node, "waterfallVolumetricMaxVolumes", settings.WaterfallVolumetricMaxVolumes, 8, 1024);
+                settings.WaterfallVolumetricCellSize = ReadFloat(node, "waterfallVolumetricCellSize", settings.WaterfallVolumetricCellSize, 12f, 500f);
+                settings.WaterfallVolumetricBrightness = ReadFloat(node, "waterfallVolumetricBrightness", settings.WaterfallVolumetricBrightness, 0.01f, 2f);
+                settings.WaterfallVolumetricSizeMultiplier = ReadFloat(node, "waterfallVolumetricSizeMultiplier", settings.WaterfallVolumetricSizeMultiplier, 0.25f, 3f);
+                settings.WaterfallVolumetricNoise = ReadFloat(node, "waterfallVolumetricNoise", settings.WaterfallVolumetricNoise, 0f, 15f);
+                settings.WaterfallParticleShellOpacity = ReadFloat(node, "waterfallParticleShellOpacity", settings.WaterfallParticleShellOpacity, 0f, 1f);
                 settings.LightVolumeEnabled = ReadBool(node, "lightVolumeEnabled", settings.LightVolumeEnabled);
                 settings.LightVolumeCellSize = ReadFloat(node, "lightVolumeCellSize", settings.LightVolumeCellSize, 8f, 500f);
                 settings.LightMarchSteps = ReadInt(node, "lightMarchSteps", settings.LightMarchSteps, 1, 16);

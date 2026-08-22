@@ -16,12 +16,22 @@ namespace PersistentSRBSmoke
         private readonly Mesh _cloudletMesh;
         private readonly PadCloudDensityField _padCloud;
         private readonly SmokeLightVolume _lightVolume;
+        private readonly WaterfallVolumetricLayer _waterfallVolumes;
         private readonly bool _usesEveVolumetricShader;
         private bool _floatingOriginRegistered;
         private int _dynamicUpdateIndex;
+        private float _appliedParticleShellOpacity = -1f;
 
         public int ParticleCount { get { return _system == null ? 0 : _system.particleCount; } }
-        public bool IsVisible { get { return _renderer != null && _renderer.isVisible; } }
+        public bool IsVisible
+        {
+            get
+            {
+                bool particlesVisible = _renderer != null && _renderer.enabled && _renderer.isVisible;
+                bool volumesVisible = _waterfallVolumes != null && _waterfallVolumes.IsVisible;
+                return particlesVisible || volumesVisible;
+            }
+        }
 
         public SmokeParticlePool(SmokeSettings settings)
         {
@@ -62,9 +72,14 @@ namespace PersistentSRBSmoke
                 _material.enableInstancing = true;
             ConfigureCheapRendererFeatures(_renderer);
 
+            _waterfallVolumes = new WaterfallVolumetricLayer(_settings);
+            UpdateVolumetricPresentation();
+
             Debug.Log(
                 "[PersistentSRBSmoke] Trail renderer: " +
                 (_usesEveVolumetricShader ? renderStatus : "procedural cloudlet fallback (" + renderStatus + ")"));
+            if (_settings.WaterfallVolumetricEnabled)
+                Debug.Log("[PersistentSRBSmoke] Analytic volume backend: " + _waterfallVolumes.Status);
 
             try
             {
@@ -231,6 +246,9 @@ namespace PersistentSRBSmoke
             if (extra >= maximumPossibleLifetime)
             {
                 _system.Clear(true);
+                if (_waterfallVolumes != null)
+                    _waterfallVolumes.Clear();
+                UpdateVolumetricPresentation();
                 return;
             }
 
@@ -259,7 +277,12 @@ namespace PersistentSRBSmoke
 
             int count = _system.GetParticles(_particleBuffer);
             if (count <= 0)
+            {
+                if (_waterfallVolumes != null)
+                    _waterfallVolumes.Clear();
+                UpdateVolumetricPresentation();
                 return;
+            }
 
             _dynamicUpdateIndex = (_dynamicUpdateIndex + 1) & 0x3FFFFFFF;
 
@@ -407,6 +430,18 @@ namespace PersistentSRBSmoke
             }
 
             _system.SetParticles(_particleBuffer, count);
+            if (_waterfallVolumes != null)
+                _waterfallVolumes.Capture(_particleBuffer, count, body);
+            UpdateVolumetricPresentation();
+        }
+
+        public void LateUpdateVolumetrics()
+        {
+            if (_waterfallVolumes == null)
+                return;
+
+            _waterfallVolumes.LateUpdate();
+            UpdateVolumetricPresentation();
         }
 
         private int GetDynamicUpdateStride(
@@ -649,6 +684,35 @@ namespace PersistentSRBSmoke
             return material;
         }
 
+        private void UpdateVolumetricPresentation()
+        {
+            if (_renderer == null || _material == null)
+                return;
+
+            // Do not dim or replace the proven particle fallback until at least one analytic proxy
+            // has passed camera culling in a supported exterior flight view.
+            bool hasVolumes = _waterfallVolumes != null && _waterfallVolumes.CanDrivePresentation;
+            _renderer.enabled = !(hasVolumes && _settings.WaterfallVolumetricReplaceParticles);
+
+            // In overlay mode the alpha cloudlets provide extinction while Waterfall contributes
+            // integrated depth, moving noise and Fresnel relief. Reduce only the shell opacity so
+            // both layers do not add up to a flat white column. EVE's private material contract is
+            // left untouched.
+            float shellOpacity = hasVolumes
+                ? Mathf.Clamp01(_settings.WaterfallParticleShellOpacity)
+                : 1f;
+            if (_usesEveVolumetricShader || !_material.HasProperty("_TintColor") ||
+                Mathf.Abs(shellOpacity - _appliedParticleShellOpacity) <= 0.0001f)
+            {
+                return;
+            }
+
+            Color tint = _material.GetColor("_TintColor");
+            tint.a = shellOpacity;
+            _material.SetColor("_TintColor", tint);
+            _appliedParticleShellOpacity = shellOpacity;
+        }
+
         private static void ConfigureCheapRendererFeatures(ParticleSystemRenderer renderer)
         {
             if (renderer == null)
@@ -772,6 +836,9 @@ namespace PersistentSRBSmoke
 
         public void Dispose()
         {
+            if (_waterfallVolumes != null)
+                _waterfallVolumes.Dispose();
+
             if (_system != null && _floatingOriginRegistered)
             {
                 try { FloatingOrigin.UnregisterParticleSystem(_system); }

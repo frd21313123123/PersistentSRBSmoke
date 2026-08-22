@@ -15,6 +15,8 @@
 - Density-driven модель стартового облака: плотный дым растекается в стороны у площадки, внешние области получают подъём.
 - Подавление stock/legacy SRB smoke без отключения Waterfall и факела двигателя.
 - Процедурная shape/detail-маска дыма с эрозией краёв и Beer–Lambert-подобной плотностью.
+- При установленном Waterfall симуляционные частицы объединяются в ограниченный набор
+  аналитических объёмов по архитектуре, которую использует VolumetricVaporCones.
 - Независимый EVE-подобный light volume: затухание солнечного света, self-shadow плотного ядра,
   рассеянное освещение, закатный оттенок и мягкая фазовая функция рассеяния.
 - Автоматическая интеграция с уже установленным EVE Volumetric Clouds: используется его
@@ -36,14 +38,25 @@
 - Большие группы ускорителей делят число сэмплов с компенсацией оптической плотности по Beer–Lambert, а не получают тонкие следы.
 - Прямой и рассеянный свет кэшируются по пространственным ячейкам и обновляются отдельными
   временными срезами; отдельные частицы только считывают готовый свет.
+- Опциональный слой Waterfall преобразует до `48000` симуляционных частиц максимум в `96`
+  аналитических объёма; число proxy-объёмов не растёт вместе с количеством ускорителей.
 - Убраны лишние временные коллекции при периодическом поиске двигателей.
 - Поиск stock-smoke компонентов кэшируется, а тяжёлый reflection reset больше не выполняется каждый кадр.
 
 Визуальные параметры возвращены к виду v0.6.1 (`maxParticles = 48000`, три плоскости), а тяжёлая динамика выполняется с частотой `4 Hz`, тени — `8 Hz`.
 
-## Ограничение текущего рендера
+## Архитектура рендера
 
-Это пока **не отдельный полноценный view-ray renderer**. При совместимом EVE может быть выбран его cloud-particle shader; без EVE каждый клуб остаётся mesh из пересекающихся прозрачных плоскостей. Автономный путь теперь получает грубый time-sliced light volume, но освещение применяется к цвету клубов, а не вычисляется попиксельно внутри raymarch. Очень плотный след всё ещё может упираться в transparent overdraw.
+`VolumetricVaporCones` не содержит собственного рендера: он настраивает шейдер Waterfall
+`Additive (Volumetric)`. Persistent SRB Smoke теперь находит уже загруженные Waterfall-шейдер и
+proxy-модель, группирует дым в привязанные к планете ячейки и рисует ограниченное число
+аналитических объёмов. Обычный Shuriken ParticleSystem остаётся источником движения, time warp и
+проецируемых теней, а также автоматически используется без Waterfall.
+
+По умолчанию сохраняется полупрозрачная оболочка из cloudlet-частиц: шейдер Waterfall аддитивный и
+изначально предназначен для пара и факелов, а не для непрозрачного серого дыма. Для более быстрого
+чисто аналитического режима можно поставить `waterfallVolumetricReplaceParticles = true`. Файлы
+Waterfall и VolumetricVaporCones в мод не копируются.
 
 Следующий крупный этап — chunked volumetric renderer с density volume, raymarching, Beer-Lambert extinction, фазовой функцией рассеяния, self-shadowing, depth-aware смешиванием и temporal accumulation. План находится в [`docs/VOLUMETRIC_ROADMAP.md`](docs/VOLUMETRIC_ROADMAP.md).
 
@@ -76,6 +89,13 @@ volumetricDensity = 1.05
 volumetricMinScatter = 0.82
 volumetricSoftDepth = 0.008
 
+waterfallVolumetricEnabled = true
+waterfallVolumetricReplaceParticles = false
+waterfallVolumetricMaxVolumes = 96
+waterfallVolumetricCellSize = 72
+waterfallVolumetricBrightness = 0.65
+waterfallParticleShellOpacity = 0.55
+
 dynamicMidAge = 0.20
 dynamicOldAge = 0.55
 dynamicMidStride = 3
@@ -101,6 +121,11 @@ lightAmbientTimeSlices = 8
 Он только подключается к shader registry уже установленного EVE. На Windows/D3D11 используется
 procedural fallback: EVE выводит этот shader через закрытый off-screen compositor, несовместимый с
 Unity Shuriken. Выбранный режим и причина всегда записываются в `KSP.log`.
+
+Мост Waterfall опциональный и использует файлы уже установленного Waterfall только во время работы.
+Архитектура изучена по
+[VolumetricVaporCones](https://github.com/huj31415/VolumetricVaporCones) (MIT) и
+[Waterfall](https://github.com/post-kerbin-mining-corporation/Waterfall) (CC BY-NC-SA 4.0).
 
 ## Сборка DLL
 
