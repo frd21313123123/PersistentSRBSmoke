@@ -15,6 +15,7 @@ namespace PersistentSRBSmoke
         private readonly Texture2D _texture;
         private readonly Mesh _cloudletMesh;
         private readonly PadCloudDensityField _padCloud;
+        private readonly SmokeLightVolume _lightVolume;
         private readonly bool _usesEveVolumetricShader;
         private bool _floatingOriginRegistered;
         private int _dynamicUpdateIndex;
@@ -27,6 +28,7 @@ namespace PersistentSRBSmoke
             _settings = settings;
             _particleBuffer = new ParticleSystem.Particle[Mathf.Max(1, settings.MaxParticles)];
             _padCloud = new PadCloudDensityField(settings);
+            _lightVolume = new SmokeLightVolume(settings);
 
             _gameObject = new GameObject("PersistentSRBSmoke.ParticlePool");
             UnityEngine.Object.DontDestroyOnLoad(_gameObject);
@@ -273,6 +275,9 @@ namespace PersistentSRBSmoke
             bool hasCamera = camera != null;
             Vector3 cameraPosition = hasCamera ? camera.transform.position : Vector3.zero;
             float farDistanceSqr = _settings.DynamicFarDistance * _settings.DynamicFarDistance;
+            Vector3 sunDirection;
+            if (!SmokeLightModel.TryGetSunDirection(body, out sunDirection))
+                sunDirection = Vector3.zero;
 
             // Build one coarse density field per dynamic update. Only cloudlets near the captured
             // launch surface enter the grid, so the long upper-atmosphere trail is unaffected.
@@ -283,6 +288,14 @@ namespace PersistentSRBSmoke
                 bodyRadius,
                 hasSurfaceReference,
                 surfaceReferenceAltitude);
+
+            // Like EVE's shared light volume, lighting is evaluated once per spatial cell and
+            // refreshed in time slices. Particles only sample the cached direct/ambient result.
+            _lightVolume.Rebuild(
+                _particleBuffer,
+                count,
+                bodyCenter,
+                sunDirection);
 
             for (int i = 0; i < count; i++)
             {
@@ -364,6 +377,32 @@ namespace PersistentSRBSmoke
                 float effectiveDt = dt * updateStride;
                 float response = 1f - Mathf.Exp(-responseRate * effectiveDt);
                 particle.velocity = Vector3.Lerp(particle.velocity, desiredVelocity, response);
+
+                if (_settings.LightVolumeEnabled)
+                {
+                    Vector3 viewDirection = hasCamera
+                        ? cameraPosition - particle.position
+                        : -sunDirection;
+                    Color lighting = _lightVolume.SampleLighting(
+                        particle.position,
+                        bodyCenter,
+                        bodyRadius,
+                        viewDirection);
+                    Color baseColor = EvaluateBaseSmokeColor(particle, sourceScale);
+                    Color currentColor = particle.startColor;
+                    float preservedAlpha = currentColor.a;
+                    Color targetColor = new Color(
+                        Mathf.Clamp01(baseColor.r * lighting.r),
+                        Mathf.Clamp01(baseColor.g * lighting.g),
+                        Mathf.Clamp01(baseColor.b * lighting.b),
+                        preservedAlpha);
+                    float lightResponse = 1f - Mathf.Exp(
+                        -Mathf.Max(0.1f, _settings.LightResponse) * effectiveDt);
+                    Color blendedColor = Color.Lerp(currentColor, targetColor, lightResponse);
+                    blendedColor.a = preservedAlpha;
+                    particle.startColor = blendedColor;
+                }
+
                 _particleBuffer[i] = particle;
             }
 
@@ -387,6 +426,23 @@ namespace PersistentSRBSmoke
                 stride *= Mathf.Max(1, _settings.DynamicFarStrideMultiplier);
 
             return Mathf.Clamp(stride, 1, 64);
+        }
+
+        private Color EvaluateBaseSmokeColor(ParticleSystem.Particle particle, float sourceScale)
+        {
+            float motorScale = Mathf.InverseLerp(0.68f, 1.05f, sourceScale);
+            Color smallColor = new Color(0.82f, 0.82f, 0.80f, 1f);
+            Color largeColor = new Color(0.95f, 0.95f, 0.94f, 1f);
+            Color baseColor = Color.Lerp(smallColor, largeColor, motorScale);
+            float localBrightness = Mathf.Lerp(
+                0.90f,
+                1.08f,
+                HashToUnit(particle.randomSeed ^ 0xA511E9B3U));
+            float brightness = _settings.SmokeBrightness * localBrightness;
+            baseColor.r = Mathf.Clamp01(baseColor.r * brightness);
+            baseColor.g = Mathf.Clamp01(baseColor.g * brightness);
+            baseColor.b = Mathf.Clamp01(baseColor.b * brightness);
+            return baseColor;
         }
 
         private float GetGroundBlend(float heightAboveGround)

@@ -249,7 +249,7 @@ namespace PersistentSRBSmoke
                     : version.Major + "." + version.Minor + "." + version.Build;
                 Debug.Log(
                     "[PersistentSRBSmoke] v" + versionText +
-                    " initialized with cached wind, dynamic LOD, UT time-warp sync, pad hold and stock-smoke suppression.");
+                    " initialized with cached wind, time-sliced light volume, dynamic LOD, UT time-warp sync, pad hold and stock-smoke suppression.");
             }
             catch (Exception ex)
             {

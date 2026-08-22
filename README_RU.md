@@ -15,6 +15,8 @@
 - Density-driven модель стартового облака: плотный дым растекается в стороны у площадки, внешние области получают подъём.
 - Подавление stock/legacy SRB smoke без отключения Waterfall и факела двигателя.
 - Процедурная shape/detail-маска дыма с эрозией краёв и Beer–Lambert-подобной плотностью.
+- Независимый EVE-подобный light volume: затухание солнечного света, self-shadow плотного ядра,
+  рассеянное освещение, закатный оттенок и мягкая фазовая функция рассеяния.
 - Автоматическая интеграция с уже установленным EVE Volumetric Clouds: используется его
   загруженный cloud-volume particle shader без копирования или поставки файлов EVE.
 - Без EVE автоматически остаётся автономный procedural cloudlet renderer.
@@ -32,6 +34,8 @@
 - Сортировка десятков тысяч прозрачных частиц по расстоянию выключена по умолчанию.
 - Для дыма отключены ненужные shadow/probe/motion-vector проходы; mesh instancing включается, когда его поддерживает shader.
 - Большие группы ускорителей делят число сэмплов с компенсацией оптической плотности по Beer–Lambert, а не получают тонкие следы.
+- Прямой и рассеянный свет кэшируются по пространственным ячейкам и обновляются отдельными
+  временными срезами; отдельные частицы только считывают готовый свет.
 - Убраны лишние временные коллекции при периодическом поиске двигателей.
 - Поиск stock-smoke компонентов кэшируется, а тяжёлый reflection reset больше не выполняется каждый кадр.
 
@@ -39,7 +43,7 @@
 
 ## Ограничение текущего рендера
 
-Это пока **не отдельный полноценный chunked raymarch renderer**. С установленным EVE след использует его объёмный cloud-particle shader; без EVE каждый клуб остаётся небольшим mesh из пересекающихся прозрачных плоскостей. В обоих режимах плотность нормализуется по Beer–Lambert, поэтому изменение количества плоскостей больше не меняет общую непрозрачность следа. В fallback-режиме очень плотный след всё ещё может упираться в transparent overdraw.
+Это пока **не отдельный полноценный view-ray renderer**. При совместимом EVE может быть выбран его cloud-particle shader; без EVE каждый клуб остаётся mesh из пересекающихся прозрачных плоскостей. Автономный путь теперь получает грубый time-sliced light volume, но освещение применяется к цвету клубов, а не вычисляется попиксельно внутри raymarch. Очень плотный след всё ещё может упираться в transparent overdraw.
 
 Следующий крупный этап — chunked volumetric renderer с density volume, raymarching, Beer-Lambert extinction, фазовой функцией рассеяния, self-shadowing, depth-aware смешиванием и temporal accumulation. План находится в [`docs/VOLUMETRIC_ROADMAP.md`](docs/VOLUMETRIC_ROADMAP.md).
 
@@ -83,6 +87,12 @@ adaptiveParticleCulling = false
 fullDensityEmitterBudget = 8
 minimumEmitterDensityScale = 0.35
 windCacheLayers = 64
+
+lightVolumeEnabled = true
+lightVolumeCellSize = 72
+lightMarchSteps = 4
+lightDirectTimeSlices = 4
+lightAmbientTimeSlices = 8
 ```
 
 Если FPS проседает, сначала уменьшай `lifetime` или `maxParticles`. Не включай `adaptiveParticleCulling`: старый age-only алгоритм разрушал видимую плотность. Для множества ускорителей теперь используется компенсированный бюджет эмиссии.

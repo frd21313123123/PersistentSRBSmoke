@@ -72,6 +72,7 @@
     <Compile Include="PersistentSRBSmoke\SmokeShadowLayer.cs" />
     <Compile Include="PersistentSRBSmoke\Settings.cs" />
     <Compile Include="PersistentSRBSmoke\SmokeParticlePool.cs" />
+    <Compile Include="PersistentSRBSmoke\SmokeLightVolume.cs" />
     <Compile Include="PersistentSRBSmoke\PadCloudDensityField.cs" />
     <Compile Include="PersistentSRBSmoke\StockSmokeSuppressor.cs" />
     <Compile Include="PersistentSRBSmoke\WindModel.cs" />

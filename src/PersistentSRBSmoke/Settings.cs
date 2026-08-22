@@ -29,6 +29,25 @@ namespace PersistentSRBSmoke
         public float VolumetricMinScatter = 0.82f;
         public float VolumetricSoftDepth = 0.008f;
 
+        // EVE-inspired, independently implemented light volume. Optical depth is accumulated into
+        // coarse body-relative cells; direct and ambient lighting are refreshed in separate slices.
+        public bool LightVolumeEnabled = true;
+        public float LightVolumeCellSize = 72f;
+        public int LightMarchSteps = 4;
+        public float LightMarchDistance = 720f;
+        public float LightExtinction = 0.20f;
+        public int LightDirectTimeSlices = 4;
+        public int LightAmbientTimeSlices = 8;
+        public float LightDensitySaturation = 10f;
+        public float LightMinimumDirect = 0.10f;
+        public float LightMinimumAmbient = 0.42f;
+        public float LightAmbientBrightness = 0.46f;
+        public float LightDirectBrightness = 0.62f;
+        public float LightNightBrightness = 0.20f;
+        public float LightPhaseStrength = 0.14f;
+        public float LightSunsetWarmth = 0.72f;
+        public float LightResponse = 2.8f;
+
         // Dynamic-motion LOD. Old/far particles keep their current velocity between updates and
         // are refreshed less often; Unity still integrates their motion every frame.
         public float DynamicMidAge = 0.20f;
@@ -171,6 +190,22 @@ namespace PersistentSRBSmoke
                 settings.VolumetricDensity = ReadFloat(node, "volumetricDensity", settings.VolumetricDensity, 0.05f, 4f);
                 settings.VolumetricMinScatter = ReadFloat(node, "volumetricMinScatter", settings.VolumetricMinScatter, 0f, 4f);
                 settings.VolumetricSoftDepth = ReadFloat(node, "volumetricSoftDepth", settings.VolumetricSoftDepth, 0.0001f, 0.1f);
+                settings.LightVolumeEnabled = ReadBool(node, "lightVolumeEnabled", settings.LightVolumeEnabled);
+                settings.LightVolumeCellSize = ReadFloat(node, "lightVolumeCellSize", settings.LightVolumeCellSize, 8f, 500f);
+                settings.LightMarchSteps = ReadInt(node, "lightMarchSteps", settings.LightMarchSteps, 1, 16);
+                settings.LightMarchDistance = ReadFloat(node, "lightMarchDistance", settings.LightMarchDistance, 20f, 5000f);
+                settings.LightExtinction = ReadFloat(node, "lightExtinction", settings.LightExtinction, 0f, 4f);
+                settings.LightDirectTimeSlices = ReadInt(node, "lightDirectTimeSlices", settings.LightDirectTimeSlices, 1, 32);
+                settings.LightAmbientTimeSlices = ReadInt(node, "lightAmbientTimeSlices", settings.LightAmbientTimeSlices, 1, 64);
+                settings.LightDensitySaturation = ReadFloat(node, "lightDensitySaturation", settings.LightDensitySaturation, 0.1f, 100f);
+                settings.LightMinimumDirect = ReadFloat(node, "lightMinimumDirect", settings.LightMinimumDirect, 0f, 1f);
+                settings.LightMinimumAmbient = ReadFloat(node, "lightMinimumAmbient", settings.LightMinimumAmbient, 0f, 1f);
+                settings.LightAmbientBrightness = ReadFloat(node, "lightAmbientBrightness", settings.LightAmbientBrightness, 0f, 2f);
+                settings.LightDirectBrightness = ReadFloat(node, "lightDirectBrightness", settings.LightDirectBrightness, 0f, 2f);
+                settings.LightNightBrightness = ReadFloat(node, "lightNightBrightness", settings.LightNightBrightness, 0f, 1f);
+                settings.LightPhaseStrength = ReadFloat(node, "lightPhaseStrength", settings.LightPhaseStrength, 0f, 1f);
+                settings.LightSunsetWarmth = ReadFloat(node, "lightSunsetWarmth", settings.LightSunsetWarmth, 0f, 1f);
+                settings.LightResponse = ReadFloat(node, "lightResponse", settings.LightResponse, 0.1f, 20f);
                 settings.DynamicMidAge = ReadFloat(node, "dynamicMidAge", settings.DynamicMidAge, 0f, 0.95f);
                 settings.DynamicOldAge = ReadFloat(node, "dynamicOldAge", settings.DynamicOldAge, 0.01f, 1f);
                 settings.DynamicMidStride = ReadInt(node, "dynamicMidStride", settings.DynamicMidStride, 1, 16);

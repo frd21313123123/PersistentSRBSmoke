@@ -16,6 +16,8 @@ A from-scratch KSP 1.12.x plugin that creates persistent, expanding world-space 
 - Uses a coarse near-pad density field for horizontal exhaust outflow and rising pad-cloud billows.
 - Suppresses stock/legacy SRB smoke while leaving flame and Waterfall effects alone.
 - Generates a shape/detail smoke mask with edge erosion and Beer-Lambert-like density at runtime.
+- Uses an independent EVE-inspired light volume for sunlight extinction, dense-core self-shadowing,
+  ambient multiple scattering, sunset tint and restrained forward/backward phase scattering.
 - Automatically uses the cloud-volume particle shader from an installed EVE Volumetric Clouds;
   no EVE binary, shader bundle or texture is copied or redistributed.
 - Falls back to the standalone procedural cloudlet renderer when EVE is absent or incompatible.
@@ -33,6 +35,8 @@ The current renderer is still particle-based, but the expensive parts are delibe
 - Particle distance sorting is disabled by default to avoid sorting tens of thousands of transparent cloudlets.
 - Particle renderers skip shadow, probe and motion-vector passes; mesh GPU instancing is enabled when the active shader supports it.
 - Large booster clusters share deposition samples with Beer-Lambert optical-depth compensation instead of producing thinner trails.
+- Direct and ambient smoke lighting are cached per spatial cell and refreshed in separate time slices;
+  particles sample the cache instead of each marching toward the Sun.
 - Reusable collections avoid repeated engine-scan allocations.
 - Stock-smoke component discovery is cached and deep reflection is no longer repeated every frame.
 
@@ -40,7 +44,7 @@ The visual defaults restore the v0.6.1 trail (`48000` maximum particles and thre
 
 ## Current renderer limitation
 
-Persistent SRB Smoke does **not** yet have its own chunked raymarch renderer. With EVE installed it uses EVE's cloud-volume particle shader; without EVE each cloudlet remains a small crossed-quad mesh. Both paths now normalize crossed-plane transmittance in a Beer-Lambert style, so changing the plane count does not also change the trail's total opacity. Very dense fallback trails can still become GPU-overdraw limited.
+Persistent SRB Smoke does **not** yet have its own chunked view-ray renderer. With EVE installed it can select a compatible cloud-volume particle shader; without EVE each cloudlet remains a small crossed-quad mesh. The standalone path now has a coarse time-sliced light volume, but this is still particle-colour lighting rather than per-pixel volumetric raymarching. Very dense fallback trails can remain GPU-overdraw limited.
 
 The planned next renderer replaces old/distant particle cloudlets with chunked density volumes and adds raymarched lighting, Beer-Lambert extinction, phase-function scattering, self-shadowing, depth-aware composition and temporal accumulation. See [`docs/VOLUMETRIC_ROADMAP.md`](docs/VOLUMETRIC_ROADMAP.md).
 
@@ -81,6 +85,12 @@ adaptiveParticleCulling = false
 fullDensityEmitterBudget = 8
 minimumEmitterDensityScale = 0.35
 windCacheLayers = 64
+
+lightVolumeEnabled = true
+lightVolumeCellSize = 72
+lightMarchSteps = 4
+lightDirectTimeSlices = 4
+lightAmbientTimeSlices = 8
 ```
 
 For better FPS, reduce `lifetime` or `maxParticles` first. Keep `adaptiveParticleCulling = false`: that legacy age-only path destroyed visible density. Large booster clusters are handled by compensated deposition budgeting instead.

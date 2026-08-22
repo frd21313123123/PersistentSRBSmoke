@@ -54,6 +54,13 @@ A practical first prototype can use 32^3 or 48^3 density textures for near chunk
 
 ## Phase 3: lighting
 
+The particle fallback now contains a first independent implementation of the same bounded-work
+principle: a body-relative sparse light grid, four short Beer-Lambert samples toward the Sun,
+separate direct/ambient time slices, density-gradient edge lighting, horizon occlusion and a
+two-lobe phase approximation. This supplies large-scale relief without copying EVE code or assets.
+It remains a per-cloudlet colour approximation; the custom raymarch path below is still required
+for true per-pixel internal scattering and shadow detail.
+
 Implement physically motivated attenuation:
 
 ```text
