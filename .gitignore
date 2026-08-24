@@ -7,3 +7,10 @@ GameData/PersistentSRBSmoke/Plugins/*.dll
 GameData/PersistentSRBSmoke/Plugins/*.pdb
 
 dist/
+
+# Unity 2019 AssetBundle project and generated release payload.
+unity/VolumetricSmokeAssets/Library/
+unity/VolumetricSmokeAssets/Temp/
+unity/VolumetricSmokeAssets/Logs/
+unity/VolumetricSmokeAssets/UserSettings/
+GameData/PersistentSRBSmoke/PluginData/VolumetricSmoke-WindowsD3D11*

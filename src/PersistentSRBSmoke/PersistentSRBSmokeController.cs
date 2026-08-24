@@ -199,7 +199,7 @@ namespace PersistentSRBSmoke
         }
 
         private SmokeSettings _settings;
-        private SmokeParticlePool _smoke;
+        private VolumetricSmokeSystem _smoke;
         private WindModel _wind;
         private StockSmokeSuppressor _stockSmokeSuppressor;
 
@@ -232,7 +232,16 @@ namespace PersistentSRBSmoke
 
             try
             {
-                _smoke = new SmokeParticlePool(_settings);
+                _smoke = new VolumetricSmokeSystem(_settings);
+                if (!_smoke.IsAvailable)
+                {
+                    Debug.LogError("[PersistentSRBSmoke] Volumetric initialization failed: "
+                        + _smoke.InitializationError);
+                    _smoke.Dispose();
+                    _smoke = null;
+                    enabled = false;
+                    return;
+                }
                 _wind = new WindModel(_settings);
                 if (_settings.SuppressStockSmoke)
                     _stockSmokeSuppressor = new StockSmokeSuppressor();
@@ -249,7 +258,8 @@ namespace PersistentSRBSmoke
                     : version.Major + "." + version.Minor + "." + version.Build;
                 Debug.Log(
                     "[PersistentSRBSmoke] v" + versionText +
-                    " initialized with bounded Waterfall analytic volumes, cached wind, time-sliced light volume, dynamic LOD, UT time-warp sync, pad hold and stock-smoke suppression.");
+                    " initialized with standalone D3D11 Hermite volume segments, tile culling, "
+                    + "raymarched lighting, pad tiles, UT time-warp sync and stock-smoke suppression.");
             }
             catch (Exception ex)
             {
@@ -285,7 +295,7 @@ namespace PersistentSRBSmoke
                     _settings.MinimumEmitterDensityScale,
                     1f);
 
-            float occupancy = _smoke.ParticleCount / (float)Mathf.Max(1, _settings.MaxParticles);
+            float occupancy = _smoke.SegmentCount / (float)Mathf.Max(1, _settings.MaxStoredSegments);
             float capacityScale = Mathf.Lerp(
                 1f,
                 0.55f,
@@ -326,8 +336,8 @@ namespace PersistentSRBSmoke
             else if (!_settings.FollowUniversalTime)
                 _pendingDynamicGameTime += unityDt;
 
-            // Advance the authoritative Shuriken simulation before taking the next volumetric
-            // snapshot. Both paths then observe the same Universal Time during rails/physics warp.
+            // Age records from Universal Time rather than Unity frame time so rails/physics warp
+            // advances the same fixed segment pool used by the renderer.
             if (_settings.FollowUniversalTime)
                 _smoke.AdvanceUniversalTime(gameDt, unityDt);
 
@@ -363,7 +373,7 @@ namespace PersistentSRBSmoke
                 float warpRatio = unityDt > 0.0001f ? gameDt / unityDt : 0f;
                 Debug.Log(
                     "[PersistentSRBSmoke] SRB emitters=" + _emitters.Count +
-                    " particles=" + _smoke.ParticleCount +
+                    " segments=" + _smoke.SegmentCount +
                     " UTdt=" + gameDt.ToString("F2") +
                     " effectiveWarp=" + warpRatio.ToString("F1") + "x");
                 _nextDebugLog = now + 5f;
@@ -373,7 +383,7 @@ namespace PersistentSRBSmoke
         private void LateUpdate()
         {
             if (_smoke != null && HighLogic.LoadedSceneIsFlight)
-                _smoke.LateUpdateVolumetrics();
+                _smoke.LateUpdateRenderer();
 
             if (_stockSmokeSuppressor == null || !_settings.SuppressStockSmoke || !HighLogic.LoadedSceneIsFlight)
                 return;
@@ -436,98 +446,66 @@ namespace PersistentSRBSmoke
             float thrustFactor = GetThrustFactor(engine);
             EngineSmokeProfile profile = emitter.Profile;
 
-            float effectiveSpacing = _settings.MaxParticleSpacing
-                * Mathf.Lerp(_settings.HighAltitudeSpacingMultiplier, 1.0f, atmosphere)
-                * profile.SpacingMultiplier;
-
-            // One continuous distance accumulator replaces the old max(timeCount, ceil(spacing))
-            // switch. Ceil changed count in whole particles at particular velocities, producing
-            // the visible bands reported during acceleration. Once moving, every metre now receives
-            // the same density regardless of frame rate or vessel speed. Time emission exists only
-            // near standstill to build the launch-pad cloud and fades with a smoothstep.
+            // Distance determines topology, while time contributes mass only at near-standstill.
+            // This gives a continuous moving trail without reproducing the old no-smoke-on-pad
+            // failure that affects distance-only volumetric emitters.
             float speed = travel / Mathf.Max(0.001f, dt);
             float fadeT = Mathf.Clamp01(speed / Mathf.Max(1f, _settings.TimeEmissionFadeSpeed));
             float stationaryBlend = 1f - Mathf.SmoothStep(0f, 1f, fadeT);
-            float distanceDensity = Mathf.Max(
-                _settings.ParticlesPerMeter,
-                1f / Mathf.Max(0.25f, effectiveSpacing));
-            float desired = (
+            float desiredMass = (
                     _settings.BaseEmissionRate * dt * stationaryBlend
-                    + travel * distanceDensity)
+                    + travel * _settings.MassPerMeter)
                 * thrustFactor
                 * atmosphere
                 * profile.EmissionMultiplier
-                * Mathf.Clamp01(globalEmissionScale);
-            emitter.EmissionAccumulator += desired;
-            int accumulatedCount = Mathf.FloorToInt(emitter.EmissionAccumulator);
-            int count = Mathf.Min(_settings.MaxEmitPerFrame, accumulatedCount);
-            if (count <= 0)
+                * Mathf.Clamp01(globalEmissionScale)
+                * opticalDepthScale;
+            emitter.EmissionAccumulator += desiredMass;
+            if (emitter.EmissionAccumulator < 0.02f)
                 return;
-
-            emitter.EmissionAccumulator -= count;
+            float opticalMass = emitter.EmissionAccumulator;
+            emitter.EmissionAccumulator = 0f;
 
             Vector3 up = vessel.upAxis;
             if (up.sqrMagnitude < 0.001f)
                 up = currentPosition.normalized;
             up.Normalize();
 
-            Vector3 trailDirection = travel > 0.001f ? travelVector / travel : -exhaust.forward;
-            if (trailDirection.sqrMagnitude < 0.001f)
-                trailDirection = up;
-            trailDirection.Normalize();
-
-            Vector3 tangentA = Vector3.Cross(trailDirection, up);
-            if (tangentA.sqrMagnitude < 0.001f)
-                tangentA = Vector3.Cross(trailDirection, Vector3.right);
-            if (tangentA.sqrMagnitude < 0.001f)
-                tangentA = Vector3.Cross(trailDirection, Vector3.forward);
-            tangentA.Normalize();
-            Vector3 tangentB = Vector3.Cross(trailDirection, tangentA).normalized;
-
             double universalTime = Planetarium.GetUniversalTime();
             Vector3 wind = _wind == null ? Vector3.zero : _wind.GetWind(vessel, up, universalTime);
             float scale = Mathf.Lerp(0.78f, 1.30f, Mathf.Sqrt(thrustFactor));
             float heightAboveGround = GetHeightAboveGround(vessel);
-            Vector3 exhaustDirection = NearNozzleSmokeLayer.ResolveExhaustDirection(engine, exhaust, vessel);
+            Vector3 exhaustDirection = SrbSmokeMath.ResolveExhaustDirection(engine, exhaust, vessel);
             float altitudeExpansion = Mathf.Lerp(
-                _settings.HighAltitudeSizeMultiplier,
+                1.32f,
                 1f,
                 Mathf.Clamp01(atmosphere));
-            float birthDiameter = _settings.StartSize
-                * scale
-                * profile.SizeMultiplier
-                * altitudeExpansion;
-            float nozzleOffset = birthDiameter * _settings.NozzleOffsetDiameters
-                + _settings.NozzleClearance;
-
-            for (int i = 0; i < count; i++)
+            float radius = _settings.TrailRadius * scale * profile.SizeMultiplier * altitudeExpansion;
+            Color color = profile.BaseColor;
+            color.a = Mathf.Clamp01(profile.OpacityMultiplier);
+            _smoke.Inject(new SrbSmokeInjection
             {
-                // Deposit samples throughout a real cross-section instead of keeping every
-                // cloudlet on a pencil-thin centre line. Dense spacing and low per-sample opacity
-                // make these lobes merge into one billowing volume rather than isolated beads.
-                float slotJitter = UnityEngine.Random.Range(-0.018f, 0.018f);
-                float t = count == 1 ? 1f : ((i + 0.5f + slotJitter) / count);
-                Vector3 point = Vector3.Lerp(previousPosition, currentPosition, Mathf.Clamp01(t));
-
-                // The particle mesh is centred on its position. Move that centre far enough down
-                // the real exhaust axis that its upper edge cannot overlap the nozzle or vehicle.
-                point += exhaustDirection * nozzleOffset;
-
-                float radialJitter = _settings.StartSize * scale * profile.SizeMultiplier * 0.24f;
-                float angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
-                float radius = Mathf.Sqrt(UnityEngine.Random.value) * radialJitter;
-                point += tangentA * (Mathf.Cos(angle) * radius) + tangentB * (Mathf.Sin(angle) * radius);
-
-                _smoke.Emit(
-                    point,
-                    up,
-                    wind,
-                    atmosphere,
-                    scale,
-                    profile,
-                    heightAboveGround,
-                    opticalDepthScale);
-            }
+                Body = vessel.mainBody,
+                EmitterId = exhaust.GetInstanceID(),
+                VesselId = vessel.id.GetHashCode(),
+                PreviousWorldPosition = previousPosition,
+                CurrentWorldPosition = currentPosition,
+                ExhaustDirection = exhaustDirection,
+                Up = up,
+                Wind = wind,
+                EmitterVelocity = Vector3.zero,
+                DeltaTime = dt,
+                Travel = travel,
+                Atmosphere = atmosphere,
+                Thrust = thrustFactor,
+                OpticalMass = opticalMass,
+                Radius = radius,
+                Lifetime = _settings.TrailLifetime * profile.LifetimeMultiplier,
+                HeightAboveGround = heightAboveGround,
+                StationaryBlend = stationaryBlend,
+                SmokeColor = color,
+                Profile = profile
+            });
         }
 
         private void ScanEngines()

@@ -34,6 +34,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup .NET for algorithm tests
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Run segment algorithm unit tests
+        run: dotnet run --project tests/VolumetricSmoke.AlgorithmTests.csproj --configuration Release
+
+      - name: Build Windows/D3D11 volumetric AssetBundle
+        uses: KSPModdingLibs/KSPBuildTools/.github/actions/build-assetbundles@main
+        with:
+          unity-version: 2019.4.18f1
+          project-dir: unity/VolumetricSmokeAssets
+          output-dir: GameData/PersistentSRBSmoke/PluginData
+          build-method: PersistentSRBSmoke.Assets.Editor.BuildVolumetricSmokeBundle.BuildWindowsD3D11
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          PERSISTENT_SRB_SMOKE_BUNDLE_OUTPUT: ${{ github.workspace }}/GameData/PersistentSRBSmoke/PluginData
+
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
@@ -42,6 +63,10 @@ jobs:
 
       - name: Compile
         run: msbuild PersistentSRBSmoke.sln /t:Build /p:Configuration=Release /p:UseKspSkeletons=true /p:RestorePackages=false
+
+      - name: Validate volumetric contract
+        shell: pwsh
+        run: ./tests/volumetric-smoke-contract.ps1 -RequireBundle
 
       - name: Package mod
         shell: pwsh
@@ -72,11 +97,28 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Build Windows/D3D11 volumetric AssetBundle
+        uses: KSPModdingLibs/KSPBuildTools/.github/actions/build-assetbundles@main
+        with:
+          unity-version: 2019.4.18f1
+          project-dir: unity/VolumetricSmokeAssets
+          output-dir: GameData/PersistentSRBSmoke/PluginData
+          build-method: PersistentSRBSmoke.Assets.Editor.BuildVolumetricSmokeBundle.BuildWindowsD3D11
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          PERSISTENT_SRB_SMOKE_BUNDLE_OUTPUT: ${{ github.workspace }}/GameData/PersistentSRBSmoke/PluginData
+
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
       - name: Restore and compile
         run: msbuild PersistentSRBSmoke.sln /restore /t:Build /p:Configuration=Release /p:UseKspSkeletons=true
+
+      - name: Validate volumetric contract
+        shell: pwsh
+        run: ./tests/volumetric-smoke-contract.ps1 -RequireBundle
 
       - name: Package and Publish Release
         shell: pwsh

@@ -1,161 +1,85 @@
-# Persistent SRB Smoke
+# Persistent SRB Smoke 1.0
 
 [![Build](https://github.com/frd21313123123/PersistentSRBSmoke/actions/workflows/build.yml/badge.svg)](https://github.com/frd21313123123/PersistentSRBSmoke/actions/workflows/build.yml)
 
-A from-scratch KSP 1.12.x plugin that creates persistent, expanding world-space smoke trails for engines that consume `SolidFuel`.
+Standalone volumetric SRB smoke for KSP 1.12.x. Version 1.0 replaces the former cloudlet/particle, Waterfall and EVE proxy presentation with one D3D11 volume pipeline.
 
-## Features
+## What it renders
 
-- Detects loaded `ModuleEngines` / `ModuleEnginesFX` that use `SolidFuel`.
-- Emits from every engine thrust transform and fills trail gaps based on distance travelled.
-- Uses world-space Unity Shuriken particles registered with KSP `FloatingOrigin`.
-- Keeps detached loaded SRBs working by scanning all loaded vessels, not only the active vessel.
-- Scales emission, size, lifetime, opacity and spacing with engine thrust.
-- Keeps smoke evolution synchronized with KSP Universal Time during time warp.
-- Applies altitude-dependent wind shear and long-lived dynamic drift.
-- Uses a coarse near-pad density field for horizontal exhaust outflow and rising pad-cloud billows.
-- Suppresses stock/legacy SRB smoke while leaving flame and Waterfall effects alone.
-- Generates a shape/detail smoke mask with edge erosion and Beer-Lambert-like density at runtime.
-- When Waterfall is installed, condenses the particle simulation into a bounded set of analytic
-  proxy volumes using the same renderer architecture exposed by VolumetricVaporCones.
-- Uses an independent EVE-inspired light volume for sunlight extinction, dense-core self-shadowing,
-  ambient multiple scattering, sunset tint and restrained forward/backward phase scattering.
-- Automatically uses the cloud-volume particle shader from an installed EVE Volumetric Clouds;
-  no EVE binary, shader bundle or texture is copied or redistributed.
-- Falls back to the standalone procedural cloudlet renderer when EVE is absent or incompatible.
+- A fixed pool of up to 4,096 body-relative Hermite trail segments.
+- The dense warm nozzle core and cold SRB trail through the same volume path, including the bell-to-trail transition.
+- Continuous deposition by distance, with time-based optical mass at low speed so launch-pad smoke does not disappear before liftoff.
+- Wind, buoyancy, expansion, dissipation, Universal Time/rails-warp advancement and loaded detached boosters.
+- Up to eight logical 32³ pad-pressure tiles, rendered as local volume fields rather than an input of visual particles.
+- D3D11 compute tile culling (16×16 pixels, 64 candidates), empty-space skipping, half-resolution raymarching, Beer–Lambert transmittance, two-lobe phase lighting, 3D noise and temporal reconstruction.
+- Integrated segment-density terrain shadows using the existing bounded terrain cache.
 
-## Performance architecture
+Old segments coarsen before the fixed pool is exhausted. Merging preserves optical mass and momentum, is limited to a single celestial body and vessel, and never consumes the fresh nozzle/core records.
 
-The current renderer is still particle-based, but the expensive parts are deliberately bounded:
+## Supported platform
 
-- Wind Perlin noise is sampled into a configurable altitude cache once per dynamic update instead of being evaluated for every particle.
-- Old smoke is dynamically updated less often than fresh smoke.
-- Smoke farther than `dynamicFarDistance` receives an additional update-rate reduction.
-- Fully off-screen smoke time-slices wind/flow reevaluation while Unity keeps integrating velocity.
-- Dynamic LOD keeps the existing particle velocity between updates, so Unity continues integrating motion every frame.
-- The default cloudlet mesh uses three crossed transparent quads instead of six.
-- Particle distance sorting is disabled by default to avoid sorting tens of thousands of transparent cloudlets.
-- Particle renderers skip shadow, probe and motion-vector passes; mesh GPU instancing is enabled when the active shader supports it.
-- Large booster clusters share deposition samples with Beer-Lambert optical-depth compensation instead of producing thinner trails.
-- Direct and ambient smoke lighting are cached per spatial cell and refreshed in separate time slices;
-  particles sample the cache instead of each marching toward the Sun.
-- The optional Waterfall layer condenses up to `48000` simulation particles into at most `96`
-  analytic volumes, so its proxy count does not grow with the number of active boosters.
-- Reusable collections avoid repeated engine-scan allocations.
-- Stock-smoke component discovery is cached and deep reflection is no longer repeated every frame.
+This major release supports only:
 
-The visual defaults restore the v0.6.1 trail (`48000` maximum particles and three cloudlet planes), while expensive dynamic motion runs at `4 Hz` and projected shadows at `8 Hz`.
+- KSP 1.12.x
+- Windows x64
+- Direct3D 11 with compute shader support
 
-## Renderer architecture
-
-`VolumetricVaporCones` does not contain a renderer of its own; it configures Waterfall's
-`Additive (Volumetric)` shader. Persistent SRB Smoke now detects that already-loaded shader and
-proxy model at runtime, groups smoke into body-relative cells, and renders a bounded analytic volume
-for every retained cell. The normal Shuriken system remains authoritative for motion, time warp and
-projected shadows, and is the automatic fallback when Waterfall is absent.
-
-The default overlay retains a reduced-opacity particle shell because Waterfall's shader is additive
-and was designed for vapor/plumes rather than fully opaque grey smoke. Set
-`waterfallVolumetricReplaceParticles = true` for the faster pure analytic presentation. No Waterfall
-shader, model, texture, DLL or VolumetricVaporCones file is copied into this mod.
-
-The planned next renderer replaces old/distant particle cloudlets with chunked density volumes and adds raymarched lighting, Beer-Lambert extinction, phase-function scattering, self-shadowing, depth-aware composition and temporal accumulation. See [`docs/VOLUMETRIC_ROADMAP.md`](docs/VOLUMETRIC_ROADMAP.md).
+If the graphics API is not D3D11, or the required AssetBundle is absent/incompatible, the effect is disabled and the reason is written to `KSP.log`. There is intentionally no particle, Waterfall or EVE fallback.
 
 ## Installation
 
-1. Download the latest `PersistentSRBSmoke-v*.zip` from Releases.
-2. Extract the archive into the Kerbal Space Program root directory, or copy the `PersistentSRBSmoke` folder into `GameData/`.
-3. Confirm the resulting path is `<KSP_DIR>/GameData/PersistentSRBSmoke/`.
+1. Download a release ZIP.
+2. Extract it into the KSP root so the bundle is at:
+   `<KSP_DIR>/GameData/PersistentSRBSmoke/PluginData/VolumetricSmoke-WindowsD3D11.bundle`.
+3. Start KSP with the Windows/D3D11 launcher option.
+
+The mod still suppresses stock smoke for detected SolidFuel engines; stock flames and ordinary engine effects remain untouched.
 
 ## Configuration
 
-Edit:
-
-`GameData/PersistentSRBSmoke/PluginData/Settings.cfg`
-
-Important performance controls:
+Edit [`Settings.cfg`](GameData/PersistentSRBSmoke/PluginData/Settings.cfg). Its root is:
 
 ```cfg
-maxParticles = 48000
-dynamicMotionHz = 4
-offscreenDynamicMotionHz = 0.5
-cloudletPlanes = 3
-sortParticles = false
-
-preferEveVolumetricShader = true
-volumetricDensity = 1.05
-volumetricMinScatter = 0.82
-volumetricSoftDepth = 0.008
-
-waterfallVolumetricEnabled = true
-waterfallVolumetricReplaceParticles = false
-waterfallVolumetricMaxVolumes = 96
-waterfallVolumetricCellSize = 72
-waterfallVolumetricBrightness = 0.65
-waterfallParticleShellOpacity = 0.55
-
-dynamicMidAge = 0.20
-dynamicOldAge = 0.55
-dynamicMidStride = 3
-dynamicOldStride = 8
-dynamicFarDistance = 3500
-dynamicFarStrideMultiplier = 3
-
-adaptiveParticleCulling = false
-fullDensityEmitterBudget = 8
-minimumEmitterDensityScale = 0.35
-windCacheLayers = 64
-
-lightVolumeEnabled = true
-lightVolumeCellSize = 72
-lightMarchSteps = 4
-lightDirectTimeSlices = 4
-lightAmbientTimeSlices = 8
+VOLUMETRIC_SRB_SMOKE
+{
+    schemaVersion = 2
+}
 ```
 
-For better FPS, reduce `lifetime` or `maxParticles` first. Keep `adaptiveParticleCulling = false`: that legacy age-only path destroyed visible density. Large booster clusters are handled by compensated deposition budgeting instead.
+`Settings.cfg` from 0.x is not migrated. A v1 runtime ignores any old root or incompatible schema and uses clean v2 defaults; replace the file with the template from this release.
 
-`preferEveVolumetricShader` does not install EVE or load files from the reference archive. It only
-uses EVE's shader registry when EVE is already installed. Windows/D3D11 uses the procedural fallback
-because EVE routes that shader through a private off-screen compositor which cannot accept Unity
-Shuriken. The selected mode and fallback reason are written to `KSP.log`.
-
-The Waterfall bridge is optional and uses assets from the user's installed Waterfall at runtime.
-The architecture was investigated through
-[VolumetricVaporCones](https://github.com/huj31415/VolumetricVaporCones) (MIT) and
-[Waterfall](https://github.com/post-kerbin-mining-corporation/Waterfall) (CC BY-NC-SA 4.0).
+The default `Balanced` profile is designed for 1080p, 2–4 SRBs and a 1,024-segment screen budget (256 near / 512 mid / 256 far), with 24 / 14 / 8 view samples and four near/mid sun samples.
 
 ## Build on Windows
 
 Requirements:
 
-1. Kerbal Space Program 1.12.x installed.
-2. Visual Studio 2022 with .NET desktop development / .NET Framework build tools.
-3. Set the `KSP_DIR` environment variable to your KSP folder.
-
-Example for Steam:
+1. KSP 1.12.x and `KSP_DIR` pointing to its installation.
+2. Visual Studio/.NET Framework build tools with the .NET Framework 4.7 targeting pack.
+3. Unity **2019.4.18f1** with Windows Build Support. Set `UNITY_PATH` to its `Unity.exe`, or install it in the default Unity Hub path.
 
 ```bat
 set KSP_DIR=C:\Program Files (x86)\Steam\steamapps\common\Kerbal Space Program
+set UNITY_PATH=C:\Program Files\Unity\Hub\Editor\2019.4.18f1\Editor\Unity.exe
 build.bat
 ```
 
-The project targets .NET Framework 4.7. A local build references KSP/Unity assemblies from:
+To build only the asset bundle:
 
-`%KSP_DIR%\KSP_x64_Data\Managed`
+```powershell
+./scripts/build-volumetric-assets.ps1
+```
 
-After a successful build, the DLL is copied to:
+The Unity project lives in [`unity/VolumetricSmokeAssets`](unity/VolumetricSmokeAssets), is pinned to KSP's Unity version, and emits `VolumetricSmoke-WindowsD3D11.bundle` into `GameData/PersistentSRBSmoke/PluginData`.
 
-`%KSP_DIR%\GameData\PersistentSRBSmoke\Plugins\PersistentSRBSmoke.dll`
+## CI and checks
 
-Copy the repository's `GameData/PersistentSRBSmoke` folder into KSP `GameData` as well so `PluginData/Settings.cfg` is present.
+GitHub Actions uses Unity 2019.4.18f1 to build the Windows/D3D11 bundle, compiles the plugin against KSP skeleton references, validates the volumetric asset contract, and packages the DLL and bundle together. Configure `UNITY_LICENSE`, `UNITY_EMAIL` and `UNITY_PASSWORD` repository secrets for Unity activation.
 
-## Automatic builds
+Run the source-level contract locally without Unity:
 
-GitHub Actions builds the plugin on pushes to `main`, pull requests and manual workflow runs. CI compiles against public KSP 1.11.2 skeleton reference assemblies only; these are compile-time stubs and are not included in release ZIPs.
+```powershell
+./tests/volumetric-smoke-contract.ps1
+```
 
-A GitHub Release is created only for a `v*` tag or when a manual workflow run explicitly enables release creation.
-
-## Compatibility
-
-The plugin does not replace Waterfall effects. Waterfall can continue rendering the engine plume while Persistent SRB Smoke renders the long-lived particulate trail behind solid rocket motors.
+Run it with `-RequireBundle` after Unity has built the bundle. The deterministic segment-rule unit tests run with `dotnet run --project tests/VolumetricSmoke.AlgorithmTests.csproj --configuration Release`. The in-game acceptance matrix is documented in [`tests/README.md`](tests/README.md).

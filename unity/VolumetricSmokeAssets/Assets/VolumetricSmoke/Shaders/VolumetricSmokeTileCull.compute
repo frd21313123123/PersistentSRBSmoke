@@ -1,0 +1,69 @@
+#pragma kernel ClearTiles
+#pragma kernel CullSegments
+
+struct SegmentGpuData
+{
+    float4 StartRadius;
+    float4 EndRadius;
+    float4 StartTangentMass;
+    float4 EndTangentTemperature;
+    float4 VelocityAge;
+    float4 Color;
+    float4 Metadata;
+    float4 Bounds;
+};
+
+StructuredBuffer<SegmentGpuData> _SegmentData;
+RWStructuredBuffer<uint> _TileCounts;
+RWStructuredBuffer<uint> _TileIndices;
+int _TileCount;
+int _SegmentCount;
+int _MaxTileCandidates;
+int _TileColumns;
+int _TileRows;
+int _TileSize;
+float4x4 _ViewProjection;
+
+[numthreads(64, 1, 1)]
+void ClearTiles(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _TileCount)
+        return;
+    _TileCounts[id.x] = 0;
+    uint baseIndex = id.x * _MaxTileCandidates;
+    [loop]
+    for (int i = 0; i < _MaxTileCandidates; i++)
+        _TileIndices[baseIndex + i] = 0xffffffff;
+}
+
+[numthreads(64, 1, 1)]
+void CullSegments(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _SegmentCount)
+        return;
+    SegmentGpuData segment = _SegmentData[id.x];
+    float4 clip = mul(_ViewProjection, float4(segment.Bounds.xyz, 1.0));
+    if (clip.w <= 0.001)
+        return;
+    float2 ndc = clip.xy / clip.w;
+    float radiusNdc = min(2.0, segment.Bounds.w / max(1.0, abs(clip.w)) * 2.2);
+    float2 minNdc = ndc - radiusNdc;
+    float2 maxNdc = ndc + radiusNdc;
+    int minX = clamp((int)floor((minNdc.x * 0.5 + 0.5) * _TileColumns), 0, _TileColumns - 1);
+    int maxX = clamp((int)floor((maxNdc.x * 0.5 + 0.5) * _TileColumns), 0, _TileColumns - 1);
+    int minY = clamp((int)floor((minNdc.y * 0.5 + 0.5) * _TileRows), 0, _TileRows - 1);
+    int maxY = clamp((int)floor((maxNdc.y * 0.5 + 0.5) * _TileRows), 0, _TileRows - 1);
+    [loop]
+    for (int y = minY; y <= maxY; y++)
+    {
+        [loop]
+        for (int x = minX; x <= maxX; x++)
+        {
+            uint tile = x + y * _TileColumns;
+            uint position;
+            InterlockedAdd(_TileCounts[tile], 1, position);
+            if (position < _MaxTileCandidates)
+                _TileIndices[tile * _MaxTileCandidates + position] = id.x;
+        }
+    }
+}

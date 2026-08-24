@@ -4,119 +4,104 @@ using UnityEngine;
 
 namespace PersistentSRBSmoke
 {
+    /// <summary>
+    /// Version-2 configuration for the standalone D3D11 volume renderer. The old particle
+    /// configuration deliberately is not read, so an outdated file cannot silently reactivate it.
+    /// </summary>
     internal sealed class SmokeSettings
     {
-        public bool Enabled = true;
+        public const int CurrentSchemaVersion = 2;
 
-        // Performance / lifetime
-        public int MaxParticles = 48000;
-        public float Lifetime = 210f;
-        public int MaxEmitPerFrame = 120;
+        public bool Enabled = true;
+        public int SchemaVersion = CurrentSchemaVersion;
+
+        // Fixed simulation pool and screen-space budget.
+        public int MaxStoredSegments = 4096;
+        public int VisibleNearSegments = 256;
+        public int VisibleMidSegments = 512;
+        public int VisibleFarSegments = 256;
+        public float NearDistance = 350f;
+        public float MidDistance = 1800f;
+        public float FarDistance = 9000f;
+        public float SegmentLength = 5.5f;
+        public int MaxSegmentsPerInjection = 24;
+        public float MergeMinAge = 8f;
+        public float MergeCellSize = 42f;
+
+        // Source integration. Mass is optical mass, not a count of visual particles.
+        public float BaseEmissionRate = 58f;
+        public float MassPerMeter = 8.5f;
+        public float TimeEmissionFadeSpeed = 20f;
+        public float TeleportDistance = 750f;
+        public float NozzleOffset = 2.2f;
+        public float NozzleLength = 10f;
+        public float NozzleRadius = 1.45f;
+        public float NozzleLifetime = 0.90f;
+        public float TrailRadius = 9f;
+        public float TrailLifetime = 210f;
+        public float ThinAtmosphereDensityFloor = 0.42f;
+
+        // Evolution. This is evaluated at a bounded cadence, including Universal Time warp.
         public float DynamicMotionHz = 4f;
         public float OffscreenDynamicMotionHz = 0.5f;
-        public float TeleportDistance = 750f;
-        public float EngineScanInterval = 2f;
-
-        // Render cost controls. Three crossed quads keep a cloudlet volumetric-looking while
-        // cutting transparent overdraw roughly in half compared with the old six-plane mesh.
-        public int CloudletPlanes = 3;
-        public bool SortParticles = false;
-
-        // When EVE Volumetric Clouds is installed, reuse its already-loaded cloud-volume particle
-        // shader without linking or redistributing EVE. The normal material remains the fallback.
-        public bool PreferEveVolumetricShader = true;
-        public float VolumetricDensity = 1.05f;
-        public float VolumetricMinScatter = 0.82f;
-        public float VolumetricSoftDepth = 0.008f;
-
-        // Optional runtime bridge to the analytic proxy volume used by VolumetricVaporCones.
-        // Waterfall supplies the shader/model from its own installation; no third-party asset is
-        // included in this mod. A fixed proxy budget prevents the particle count from becoming a
-        // matching number of expensive transparent volumes.
-        public bool WaterfallVolumetricEnabled = true;
-        public bool WaterfallVolumetricReplaceParticles = false;
-        public int WaterfallVolumetricMaxVolumes = 96;
-        public float WaterfallVolumetricCellSize = 72f;
-        public float WaterfallVolumetricBrightness = 0.65f;
-        public float WaterfallVolumetricSizeMultiplier = 1.08f;
-        public float WaterfallVolumetricNoise = 6.5f;
-        public float WaterfallParticleShellOpacity = 0.55f;
-
-        // EVE-inspired, independently implemented light volume. Optical depth is accumulated into
-        // coarse body-relative cells; direct and ambient lighting are refreshed in separate slices.
-        public bool LightVolumeEnabled = true;
-        public float LightVolumeCellSize = 72f;
-        public int LightMarchSteps = 4;
-        public float LightMarchDistance = 720f;
-        public float LightExtinction = 0.20f;
-        public int LightDirectTimeSlices = 4;
-        public int LightAmbientTimeSlices = 8;
-        public float LightDensitySaturation = 10f;
-        public float LightMinimumDirect = 0.10f;
-        public float LightMinimumAmbient = 0.42f;
-        public float LightAmbientBrightness = 0.46f;
-        public float LightDirectBrightness = 0.62f;
-        public float LightNightBrightness = 0.20f;
-        public float LightPhaseStrength = 0.14f;
-        public float LightSunsetWarmth = 0.72f;
-        public float LightResponse = 2.8f;
-
-        // Dynamic-motion LOD. Old/far particles keep their current velocity between updates and
-        // are refreshed less often; Unity still integrates their motion every frame.
-        public float DynamicMidAge = 0.20f;
-        public float DynamicOldAge = 0.55f;
-        public int DynamicMidStride = 3;
-        public int DynamicOldStride = 8;
-        public float DynamicFarDistance = 3500f;
-        public int DynamicFarStrideMultiplier = 3;
-
-        // Destructive age-only culling is intentionally disabled. It removed optical depth and made
-        // the expanded trail sparse. The legacy keys are still parsed so old configs remain valid,
-        // but the renderer no longer deletes existing particles through this path.
-        public bool AdaptiveParticleCulling = false;
-        public float ParticleCullingStartAge = 0.35f;
-        public float ParticleCullingPower = 0.65f;
-        public float ParticleCullingMinimumKeep = 0.50f;
-
-        // Ordinary craft keep the full v0.6.1 density. Very large booster clusters share a bounded
-        // sampling budget; each retained sample receives Beer-Lambert optical-depth compensation.
-        public int FullDensityEmitterBudget = 8;
-        public float MinimumEmitterDensityScale = 0.35f;
-
-        // Number of altitude samples used by the large-scale wind profile. Samples are interpolated
-        // smoothly; the local spreading field is analytic and does not require extra Perlin calls.
-        public int WindCacheLayers = 64;
-
-        // KSP time warp / universal-time synchronization
-        public bool FollowUniversalTime = true;
         public float MaxWarpSimulationStep = 5f;
+        public float DissipationRate = 0.88f;
+        public float RadiusGrowth = 1.95f;
+        public float DiffusionSpeed = 4.4f;
+        public float Buoyancy = 0.24f;
+        public float DynamicWindResponse = 1.6f;
+        public float TurbulenceStrength = 1.1f;
+        public float TurbulenceFrequency = 0.055f;
+        public float NearGroundHoldHeight = 60f;
+        public float NearGroundWindMultiplier = 0.12f;
+        public float NearGroundDiffusionMultiplier = 0.25f;
+        public float NearGroundBuoyancyMultiplier = 0.40f;
 
-        // Suppress stock / legacy smoke so only this mod owns the persistent SRB trail.
-        public bool SuppressStockSmoke = true;
-        public float StockSmokeRefreshInterval = 0.75f;
+        // Logical 32^3 pad tiles. The shader evaluates the volume procedurally from these tiles.
+        public bool PadFieldEnabled = true;
+        public int PadTileCount = 8;
+        public int PadTileResolution = 32;
+        public float PadTileSize = 90f;
+        public float PadFieldHeight = 120f;
+        public float PadOutflowSpeed = 18f;
+        public float PadUpdraftSpeed = 5.5f;
+        public float PadMassThreshold = 5f;
+        public float PadMassSaturation = 24f;
+        public float PadMassBias = 0.72f;
 
-        // Emission / continuity
-        public float BaseEmissionRate = 52f;
-        public float ParticlesPerMeter = 1.10f;
-        public float MaxParticleSpacing = 0.55f;
-        public float HighAltitudeSpacingMultiplier = 1.25f;
-        public float ThinAtmosphereDensityFloor = 0.42f;
-        public float TimeEmissionFadeSpeed = 20f;
+        // Lighting and raymarch parameters for the bundled shader.
+        public float Extinction = 0.074f;
+        public float Scattering = 0.82f;
+        public float AmbientLight = 0.28f;
+        public float SunLight = 1.05f;
+        public float SunsetWarmth = 0.72f;
+        public float NoiseScale = 0.082f;
+        public float NoiseStrength = 0.58f;
+        public int NearViewSamples = 24;
+        public int MidViewSamples = 14;
+        public int FarViewSamples = 8;
+        public int SunShadowSamples = 4;
+        public int TileSize = 16;
+        public int MaxTileCandidates = 64;
+        public bool TemporalReconstruction = true;
+        public float TemporalBlend = 0.82f;
+        public float TemporalDepthThreshold = 0.004f;
 
-        // Keep the large persistent cloud entirely behind the physical nozzle. The centre offset
-        // scales with its birth diameter and adds a small absolute clearance for tiny engines.
-        public float NozzleOffsetDiameters = 0.55f;
-        public float NozzleClearance = 5f;
+        // Projected volume-shadow layer. It shares the established terrain cache strategy.
+        public bool ShadowsEnabled = true;
+        public float ShadowUpdateHz = 8f;
+        public int ShadowMaxQuads = 900;
+        public float ShadowOpacity = 0.18f;
+        public float ShadowSizeMultiplier = 1.55f;
+        public float ShadowLengthMultiplier = 1.15f;
+        public float ShadowSurfaceOffset = 4f;
+        public float ShadowMaxAltitude = 14000f;
+        public int ShadowTerrainQueriesPerFrame = 16;
+        public float ShadowTerrainCacheMeters = 220f;
+        public int ShadowTerrainCacheCapacity = 12000;
 
-        // Visual plume size
-        public float StartSize = 24.0f;
-        public float SizeGrowth = 14.0f;
-        public float HighAltitudeSizeMultiplier = 1.85f;
-        public float Opacity = 0.88f;
-        public float SmokeBrightness = 1.16f;
-        public float EngineColorVariation = 0.05f;
-
-        // Engine-dependent smoke scaling. KSP engine thrust is measured in kN.
+        // SRB selection, scale and retained KSP behavior.
+        public float EngineScanInterval = 2f;
         public bool EngineScalingEnabled = true;
         public float EngineMinThrust = 8f;
         public float EngineMaxThrust = 800f;
@@ -130,38 +115,14 @@ namespace PersistentSRBSmoke
         public float LargeEngineOpacityMultiplier = 1.08f;
         public float SmallEngineSpacingMultiplier = 1.00f;
         public float LargeEngineSpacingMultiplier = 0.95f;
+        public float SmokeBrightness = 1.16f;
+        public float EngineColorVariation = 0.05f;
+        public int FullDensityEmitterBudget = 8;
+        public float MinimumEmitterDensityScale = 0.35f;
 
-        // Local cloud motion / diffusion. This remains independent of the prevailing wind so smoke
-        // continues to widen at every altitude instead of behaving like a rigid ribbon.
-        public float DriftSpeed = 1.8f;
-        public float DiffusionSpeed = 4.4f;
-        public float DiffusionGrowth = 1.95f;
-        public float Buoyancy = 0.24f;
-        public float DynamicWindResponse = 1.6f;
-        public float TurbulenceStrength = 1.1f;
-        public float TurbulenceFrequency = 0.055f;
-
-        // Near-pad hold. Wind stays weak here so the whole cloud is not translated off the pad.
-        public float NearGroundHoldHeight = 60f;
-        public float NearGroundWindMultiplier = 0.12f;
-        public float NearGroundDiffusionMultiplier = 0.25f;
-        public float NearGroundBuoyancyMultiplier = 0.40f;
-
-        // Density-driven launch-pad cloud. Dense exhaust is pushed sideways across the ground while
-        // the thinning outer lobes curl upward, approximating the large Shuttle-style pad billow.
-        public bool PadCloudEnabled = true;
-        public float PadCloudHeight = 120f;
-        public float PadCloudCellSize = 18f;
-        public float PadCloudDensityThreshold = 5f;
-        public float PadCloudDensitySaturation = 24f;
-        public float PadCloudOutflowSpeed = 18f;
-        public float PadCloudUpdraftSpeed = 5.5f;
-        public float PadCloudGlobalBias = 0.72f;
-
-        // Continuous altitude-dependent wind. WindLayerHeight is now a broad vertical variation
-        // scale, not a hard layer boundary. WindSpread* controls large weak horizontal eddies that
-        // fan out the plume without drawing the trail into a visible sine-wave pattern.
+        // Wind and KSP lifecycle.
         public bool WindEnabled = true;
+        public int WindCacheLayers = 64;
         public float WindSpeed = 4.4f;
         public float WindLayerHeight = 9000f;
         public float WindTopAltitude = 32000f;
@@ -171,100 +132,129 @@ namespace PersistentSRBSmoke
         public float WindSpreadScale = 850f;
         public float WindSpreadVerticalScale = 2600f;
         public float WindSpreadTimeScale = 0.00035f;
-
+        public bool FollowUniversalTime = true;
+        public bool SuppressStockSmoke = true;
+        public float StockSmokeRefreshInterval = 0.75f;
         public bool DebugLogging = false;
+
+        public int MaxVisibleSegments
+        {
+            get { return VisibleNearSegments + VisibleMidSegments + VisibleFarSegments; }
+        }
 
         public static SmokeSettings Load()
         {
-            var settings = new SmokeSettings();
+            SmokeSettings settings = new SmokeSettings();
+            string path = KSPUtil.ApplicationRootPath
+                + "GameData/PersistentSRBSmoke/PluginData/Settings.cfg";
+
             try
             {
-                string path = KSPUtil.ApplicationRootPath + "GameData/PersistentSRBSmoke/PluginData/Settings.cfg";
                 ConfigNode file = ConfigNode.Load(path);
-                ConfigNode node = file == null ? null : file.GetNode("PERSISTENT_SRB_SMOKE");
+                ConfigNode node = file == null ? null : file.GetNode("VOLUMETRIC_SRB_SMOKE");
                 if (node == null)
                 {
-                    Debug.Log("[PersistentSRBSmoke] Settings not found, using defaults.");
+                    Debug.LogWarning(
+                        "[PersistentSRBSmoke] Settings.cfg has no VOLUMETRIC_SRB_SMOKE node; "
+                        + "using clean schema v2 defaults. Legacy settings are intentionally ignored.");
                     return settings;
                 }
 
+                settings.SchemaVersion = ReadInt(node, "schemaVersion", settings.SchemaVersion, 1, 99);
+                if (settings.SchemaVersion != CurrentSchemaVersion)
+                {
+                    Debug.LogWarning(
+                        "[PersistentSRBSmoke] Settings schema " + settings.SchemaVersion
+                        + " is incompatible with volumetric schema " + CurrentSchemaVersion
+                        + "; using clean defaults. Replace Settings.cfg from this release.");
+                    return new SmokeSettings();
+                }
+
                 settings.Enabled = ReadBool(node, "enabled", settings.Enabled);
+                settings.MaxStoredSegments = ReadInt(node, "maxStoredSegments", settings.MaxStoredSegments, 256, 4096);
+                settings.VisibleNearSegments = ReadInt(node, "visibleNearSegments", settings.VisibleNearSegments, 0, 4096);
+                settings.VisibleMidSegments = ReadInt(node, "visibleMidSegments", settings.VisibleMidSegments, 0, 4096);
+                settings.VisibleFarSegments = ReadInt(node, "visibleFarSegments", settings.VisibleFarSegments, 0, 4096);
+                ClampVisibleBudget(settings);
+                settings.NearDistance = ReadFloat(node, "nearDistance", settings.NearDistance, 5f, 100000f);
+                settings.MidDistance = ReadFloat(node, "midDistance", settings.MidDistance, settings.NearDistance, 100000f);
+                settings.FarDistance = ReadFloat(node, "farDistance", settings.FarDistance, settings.MidDistance, 1000000f);
+                settings.SegmentLength = ReadFloat(node, "segmentLength", settings.SegmentLength, 0.5f, 100f);
+                settings.MaxSegmentsPerInjection = ReadInt(node, "maxSegmentsPerInjection", settings.MaxSegmentsPerInjection, 1, 128);
+                settings.MergeMinAge = ReadFloat(node, "mergeMinAge", settings.MergeMinAge, 0f, 10000f);
+                settings.MergeCellSize = ReadFloat(node, "mergeCellSize", settings.MergeCellSize, 2f, 1000f);
 
-                settings.MaxParticles = ReadInt(node, "maxParticles", settings.MaxParticles, 1000, 150000);
-                settings.Lifetime = ReadFloat(node, "lifetime", settings.Lifetime, 5f, 600f);
-                settings.MaxEmitPerFrame = ReadInt(node, "maxEmitPerFrame", settings.MaxEmitPerFrame, 1, 2000);
-                settings.DynamicMotionHz = ReadFloat(node, "dynamicMotionHz", settings.DynamicMotionHz, 1f, 30f);
-                settings.OffscreenDynamicMotionHz = ReadFloat(node, "offscreenDynamicMotionHz", settings.OffscreenDynamicMotionHz, 0.1f, 10f);
-                settings.TeleportDistance = ReadFloat(node, "teleportDistance", settings.TeleportDistance, 10f, 10000f);
-                settings.EngineScanInterval = ReadFloat(node, "engineScanInterval", settings.EngineScanInterval, 0.25f, 30f);
-                settings.CloudletPlanes = ReadInt(node, "cloudletPlanes", settings.CloudletPlanes, 2, 6);
-                settings.SortParticles = ReadBool(node, "sortParticles", settings.SortParticles);
-                settings.PreferEveVolumetricShader = ReadBool(node, "preferEveVolumetricShader", settings.PreferEveVolumetricShader);
-                settings.VolumetricDensity = ReadFloat(node, "volumetricDensity", settings.VolumetricDensity, 0.05f, 4f);
-                settings.VolumetricMinScatter = ReadFloat(node, "volumetricMinScatter", settings.VolumetricMinScatter, 0f, 4f);
-                settings.VolumetricSoftDepth = ReadFloat(node, "volumetricSoftDepth", settings.VolumetricSoftDepth, 0.0001f, 0.1f);
-                settings.WaterfallVolumetricEnabled = ReadBool(node, "waterfallVolumetricEnabled", settings.WaterfallVolumetricEnabled);
-                settings.WaterfallVolumetricReplaceParticles = ReadBool(node, "waterfallVolumetricReplaceParticles", settings.WaterfallVolumetricReplaceParticles);
-                settings.WaterfallVolumetricMaxVolumes = ReadInt(node, "waterfallVolumetricMaxVolumes", settings.WaterfallVolumetricMaxVolumes, 8, 1024);
-                settings.WaterfallVolumetricCellSize = ReadFloat(node, "waterfallVolumetricCellSize", settings.WaterfallVolumetricCellSize, 12f, 500f);
-                settings.WaterfallVolumetricBrightness = ReadFloat(node, "waterfallVolumetricBrightness", settings.WaterfallVolumetricBrightness, 0.01f, 2f);
-                settings.WaterfallVolumetricSizeMultiplier = ReadFloat(node, "waterfallVolumetricSizeMultiplier", settings.WaterfallVolumetricSizeMultiplier, 0.25f, 3f);
-                settings.WaterfallVolumetricNoise = ReadFloat(node, "waterfallVolumetricNoise", settings.WaterfallVolumetricNoise, 0f, 15f);
-                settings.WaterfallParticleShellOpacity = ReadFloat(node, "waterfallParticleShellOpacity", settings.WaterfallParticleShellOpacity, 0f, 1f);
-                settings.LightVolumeEnabled = ReadBool(node, "lightVolumeEnabled", settings.LightVolumeEnabled);
-                settings.LightVolumeCellSize = ReadFloat(node, "lightVolumeCellSize", settings.LightVolumeCellSize, 8f, 500f);
-                settings.LightMarchSteps = ReadInt(node, "lightMarchSteps", settings.LightMarchSteps, 1, 16);
-                settings.LightMarchDistance = ReadFloat(node, "lightMarchDistance", settings.LightMarchDistance, 20f, 5000f);
-                settings.LightExtinction = ReadFloat(node, "lightExtinction", settings.LightExtinction, 0f, 4f);
-                settings.LightDirectTimeSlices = ReadInt(node, "lightDirectTimeSlices", settings.LightDirectTimeSlices, 1, 32);
-                settings.LightAmbientTimeSlices = ReadInt(node, "lightAmbientTimeSlices", settings.LightAmbientTimeSlices, 1, 64);
-                settings.LightDensitySaturation = ReadFloat(node, "lightDensitySaturation", settings.LightDensitySaturation, 0.1f, 100f);
-                settings.LightMinimumDirect = ReadFloat(node, "lightMinimumDirect", settings.LightMinimumDirect, 0f, 1f);
-                settings.LightMinimumAmbient = ReadFloat(node, "lightMinimumAmbient", settings.LightMinimumAmbient, 0f, 1f);
-                settings.LightAmbientBrightness = ReadFloat(node, "lightAmbientBrightness", settings.LightAmbientBrightness, 0f, 2f);
-                settings.LightDirectBrightness = ReadFloat(node, "lightDirectBrightness", settings.LightDirectBrightness, 0f, 2f);
-                settings.LightNightBrightness = ReadFloat(node, "lightNightBrightness", settings.LightNightBrightness, 0f, 1f);
-                settings.LightPhaseStrength = ReadFloat(node, "lightPhaseStrength", settings.LightPhaseStrength, 0f, 1f);
-                settings.LightSunsetWarmth = ReadFloat(node, "lightSunsetWarmth", settings.LightSunsetWarmth, 0f, 1f);
-                settings.LightResponse = ReadFloat(node, "lightResponse", settings.LightResponse, 0.1f, 20f);
-                settings.DynamicMidAge = ReadFloat(node, "dynamicMidAge", settings.DynamicMidAge, 0f, 0.95f);
-                settings.DynamicOldAge = ReadFloat(node, "dynamicOldAge", settings.DynamicOldAge, 0.01f, 1f);
-                settings.DynamicMidStride = ReadInt(node, "dynamicMidStride", settings.DynamicMidStride, 1, 16);
-                settings.DynamicOldStride = ReadInt(node, "dynamicOldStride", settings.DynamicOldStride, 1, 32);
-                settings.DynamicFarDistance = ReadFloat(node, "dynamicFarDistance", settings.DynamicFarDistance, 100f, 100000f);
-                settings.DynamicFarStrideMultiplier = ReadInt(node, "dynamicFarStrideMultiplier", settings.DynamicFarStrideMultiplier, 1, 16);
-                settings.AdaptiveParticleCulling = ReadBool(node, "adaptiveParticleCulling", settings.AdaptiveParticleCulling);
-                settings.ParticleCullingStartAge = ReadFloat(node, "particleCullingStartAge", settings.ParticleCullingStartAge, 0f, 0.8f);
-                settings.ParticleCullingPower = ReadFloat(node, "particleCullingPower", settings.ParticleCullingPower, 0.1f, 3f);
-                settings.ParticleCullingMinimumKeep = ReadFloat(node, "particleCullingMinimumKeep", settings.ParticleCullingMinimumKeep, 0.005f, 1f);
-                settings.FullDensityEmitterBudget = ReadInt(node, "fullDensityEmitterBudget", settings.FullDensityEmitterBudget, 1, 64);
-                settings.MinimumEmitterDensityScale = ReadFloat(node, "minimumEmitterDensityScale", settings.MinimumEmitterDensityScale, 0.05f, 1f);
-                settings.WindCacheLayers = ReadInt(node, "windCacheLayers", settings.WindCacheLayers, 8, 512);
-
-                settings.FollowUniversalTime = ReadBool(node, "followUniversalTime", settings.FollowUniversalTime);
-                settings.MaxWarpSimulationStep = ReadFloat(node, "maxWarpSimulationStep", settings.MaxWarpSimulationStep, 0.25f, 30f);
-                settings.SuppressStockSmoke = ReadBool(node, "suppressStockSmoke", settings.SuppressStockSmoke);
-                settings.StockSmokeRefreshInterval = ReadFloat(node, "stockSmokeRefreshInterval", settings.StockSmokeRefreshInterval, 0.1f, 10f);
-
-                settings.BaseEmissionRate = ReadFloat(node, "baseEmissionRate", settings.BaseEmissionRate, 0f, 500f);
-                settings.ParticlesPerMeter = ReadFloat(node, "particlesPerMeter", settings.ParticlesPerMeter, 0f, 10f);
-                settings.MaxParticleSpacing = ReadFloat(node, "maxParticleSpacing", settings.MaxParticleSpacing, 0.25f, 25f);
-                settings.HighAltitudeSpacingMultiplier = ReadFloat(node, "highAltitudeSpacingMultiplier", settings.HighAltitudeSpacingMultiplier, 1f, 5f);
+                settings.BaseEmissionRate = ReadFloat(node, "baseEmissionRate", settings.BaseEmissionRate, 0f, 10000f);
+                settings.MassPerMeter = ReadFloat(node, "massPerMeter", settings.MassPerMeter, 0f, 10000f);
+                settings.TimeEmissionFadeSpeed = ReadFloat(node, "timeEmissionFadeSpeed", settings.TimeEmissionFadeSpeed, 0.1f, 300f);
+                settings.TeleportDistance = ReadFloat(node, "teleportDistance", settings.TeleportDistance, 10f, 50000f);
+                settings.NozzleOffset = ReadFloat(node, "nozzleOffset", settings.NozzleOffset, 0f, 100f);
+                settings.NozzleLength = ReadFloat(node, "nozzleLength", settings.NozzleLength, 0.1f, 200f);
+                settings.NozzleRadius = ReadFloat(node, "nozzleRadius", settings.NozzleRadius, 0.05f, 100f);
+                settings.NozzleLifetime = ReadFloat(node, "nozzleLifetime", settings.NozzleLifetime, 0.05f, 10f);
+                settings.TrailRadius = ReadFloat(node, "trailRadius", settings.TrailRadius, 0.1f, 500f);
+                settings.TrailLifetime = ReadFloat(node, "trailLifetime", settings.TrailLifetime, 1f, 10000f);
                 settings.ThinAtmosphereDensityFloor = ReadFloat(node, "thinAtmosphereDensityFloor", settings.ThinAtmosphereDensityFloor, 0f, 1f);
-                settings.TimeEmissionFadeSpeed = ReadFloat(node, "timeEmissionFadeSpeed", settings.TimeEmissionFadeSpeed, 1f, 300f);
-                settings.NozzleOffsetDiameters = ReadFloat(node, "nozzleOffsetDiameters", settings.NozzleOffsetDiameters, 0f, 3f);
-                settings.NozzleClearance = ReadFloat(node, "nozzleClearance", settings.NozzleClearance, 0f, 50f);
 
-                settings.StartSize = ReadFloat(node, "startSize", settings.StartSize, 0.1f, 100f);
-                settings.SizeGrowth = ReadFloat(node, "sizeGrowth", settings.SizeGrowth, 1f, 40f);
-                settings.HighAltitudeSizeMultiplier = ReadFloat(node, "highAltitudeSizeMultiplier", settings.HighAltitudeSizeMultiplier, 1f, 5f);
-                settings.Opacity = ReadFloat(node, "opacity", settings.Opacity, 0.01f, 1f);
-                settings.SmokeBrightness = ReadFloat(node, "smokeBrightness", settings.SmokeBrightness, 0.2f, 1.4f);
-                settings.EngineColorVariation = ReadFloat(node, "engineColorVariation", settings.EngineColorVariation, 0f, 0.3f);
+                settings.DynamicMotionHz = ReadFloat(node, "dynamicMotionHz", settings.DynamicMotionHz, 0.1f, 60f);
+                settings.OffscreenDynamicMotionHz = ReadFloat(node, "offscreenDynamicMotionHz", settings.OffscreenDynamicMotionHz, 0.05f, 60f);
+                settings.MaxWarpSimulationStep = ReadFloat(node, "maxWarpSimulationStep", settings.MaxWarpSimulationStep, 0.05f, 120f);
+                settings.DissipationRate = ReadFloat(node, "dissipationRate", settings.DissipationRate, 0f, 20f);
+                settings.RadiusGrowth = ReadFloat(node, "radiusGrowth", settings.RadiusGrowth, 0f, 20f);
+                settings.DiffusionSpeed = ReadFloat(node, "diffusionSpeed", settings.DiffusionSpeed, 0f, 100f);
+                settings.Buoyancy = ReadFloat(node, "buoyancy", settings.Buoyancy, -20f, 20f);
+                settings.DynamicWindResponse = ReadFloat(node, "dynamicWindResponse", settings.DynamicWindResponse, 0f, 30f);
+                settings.TurbulenceStrength = ReadFloat(node, "turbulenceStrength", settings.TurbulenceStrength, 0f, 50f);
+                settings.TurbulenceFrequency = ReadFloat(node, "turbulenceFrequency", settings.TurbulenceFrequency, 0.001f, 5f);
+                settings.NearGroundHoldHeight = ReadFloat(node, "nearGroundHoldHeight", settings.NearGroundHoldHeight, 0f, 1000f);
+                settings.NearGroundWindMultiplier = ReadFloat(node, "nearGroundWindMultiplier", settings.NearGroundWindMultiplier, 0f, 1f);
+                settings.NearGroundDiffusionMultiplier = ReadFloat(node, "nearGroundDiffusionMultiplier", settings.NearGroundDiffusionMultiplier, 0f, 1f);
+                settings.NearGroundBuoyancyMultiplier = ReadFloat(node, "nearGroundBuoyancyMultiplier", settings.NearGroundBuoyancyMultiplier, 0f, 1f);
 
+                settings.PadFieldEnabled = ReadBool(node, "padFieldEnabled", settings.PadFieldEnabled);
+                settings.PadTileCount = ReadInt(node, "padTileCount", settings.PadTileCount, 1, 8);
+                settings.PadTileResolution = ReadInt(node, "padTileResolution", settings.PadTileResolution, 32, 32);
+                settings.PadTileSize = ReadFloat(node, "padTileSize", settings.PadTileSize, 10f, 1000f);
+                settings.PadFieldHeight = ReadFloat(node, "padFieldHeight", settings.PadFieldHeight, 10f, 1000f);
+                settings.PadOutflowSpeed = ReadFloat(node, "padOutflowSpeed", settings.PadOutflowSpeed, 0f, 100f);
+                settings.PadUpdraftSpeed = ReadFloat(node, "padUpdraftSpeed", settings.PadUpdraftSpeed, 0f, 100f);
+                settings.PadMassThreshold = ReadFloat(node, "padMassThreshold", settings.PadMassThreshold, 0.01f, 10000f);
+                settings.PadMassSaturation = ReadFloat(node, "padMassSaturation", settings.PadMassSaturation, settings.PadMassThreshold, 10000f);
+                settings.PadMassBias = ReadFloat(node, "padMassBias", settings.PadMassBias, 0f, 1f);
+
+                settings.Extinction = ReadFloat(node, "extinction", settings.Extinction, 0.001f, 5f);
+                settings.Scattering = ReadFloat(node, "scattering", settings.Scattering, 0f, 5f);
+                settings.AmbientLight = ReadFloat(node, "ambientLight", settings.AmbientLight, 0f, 5f);
+                settings.SunLight = ReadFloat(node, "sunLight", settings.SunLight, 0f, 5f);
+                settings.SunsetWarmth = ReadFloat(node, "sunsetWarmth", settings.SunsetWarmth, 0f, 1f);
+                settings.NoiseScale = ReadFloat(node, "noiseScale", settings.NoiseScale, 0.001f, 2f);
+                settings.NoiseStrength = ReadFloat(node, "noiseStrength", settings.NoiseStrength, 0f, 1f);
+                settings.NearViewSamples = ReadInt(node, "nearViewSamples", settings.NearViewSamples, 4, 64);
+                settings.MidViewSamples = ReadInt(node, "midViewSamples", settings.MidViewSamples, 2, 64);
+                settings.FarViewSamples = ReadInt(node, "farViewSamples", settings.FarViewSamples, 1, 64);
+                settings.SunShadowSamples = ReadInt(node, "sunShadowSamples", settings.SunShadowSamples, 0, 16);
+                settings.TileSize = ReadInt(node, "tileSize", settings.TileSize, 8, 64);
+                settings.MaxTileCandidates = ReadInt(node, "maxTileCandidates", settings.MaxTileCandidates, 8, 128);
+                settings.TemporalReconstruction = ReadBool(node, "temporalReconstruction", settings.TemporalReconstruction);
+                settings.TemporalBlend = ReadFloat(node, "temporalBlend", settings.TemporalBlend, 0f, 0.98f);
+                settings.TemporalDepthThreshold = ReadFloat(node, "temporalDepthThreshold", settings.TemporalDepthThreshold, 0.0001f, 0.1f);
+
+                settings.ShadowsEnabled = ReadBool(node, "shadowsEnabled", settings.ShadowsEnabled);
+                settings.ShadowUpdateHz = ReadFloat(node, "shadowUpdateHz", settings.ShadowUpdateHz, 0.1f, 60f);
+                settings.ShadowMaxQuads = ReadInt(node, "shadowMaxQuads", settings.ShadowMaxQuads, 1, 4096);
+                settings.ShadowOpacity = ReadFloat(node, "shadowOpacity", settings.ShadowOpacity, 0f, 1f);
+                settings.ShadowSizeMultiplier = ReadFloat(node, "shadowSizeMultiplier", settings.ShadowSizeMultiplier, 0.1f, 10f);
+                settings.ShadowLengthMultiplier = ReadFloat(node, "shadowLengthMultiplier", settings.ShadowLengthMultiplier, 0.1f, 10f);
+                settings.ShadowSurfaceOffset = ReadFloat(node, "shadowSurfaceOffset", settings.ShadowSurfaceOffset, 0f, 100f);
+                settings.ShadowMaxAltitude = ReadFloat(node, "shadowMaxAltitude", settings.ShadowMaxAltitude, 100f, 100000f);
+                settings.ShadowTerrainQueriesPerFrame = ReadInt(node, "shadowTerrainQueriesPerFrame", settings.ShadowTerrainQueriesPerFrame, 0, 512);
+                settings.ShadowTerrainCacheMeters = ReadFloat(node, "shadowTerrainCacheMeters", settings.ShadowTerrainCacheMeters, 20f, 5000f);
+                settings.ShadowTerrainCacheCapacity = ReadInt(node, "shadowTerrainCacheCapacity", settings.ShadowTerrainCacheCapacity, 256, 100000);
+
+                settings.EngineScanInterval = ReadFloat(node, "engineScanInterval", settings.EngineScanInterval, 0.2f, 30f);
                 settings.EngineScalingEnabled = ReadBool(node, "engineScalingEnabled", settings.EngineScalingEnabled);
                 settings.EngineMinThrust = ReadFloat(node, "engineMinThrust", settings.EngineMinThrust, 0.1f, 5000f);
-                settings.EngineMaxThrust = ReadFloat(node, "engineMaxThrust", settings.EngineMaxThrust, 0.2f, 20000f);
+                settings.EngineMaxThrust = ReadFloat(node, "engineMaxThrust", settings.EngineMaxThrust, settings.EngineMinThrust + 0.1f, 20000f);
                 settings.SmallEngineEmissionMultiplier = ReadFloat(node, "smallEngineEmissionMultiplier", settings.SmallEngineEmissionMultiplier, 0.01f, 3f);
                 settings.LargeEngineEmissionMultiplier = ReadFloat(node, "largeEngineEmissionMultiplier", settings.LargeEngineEmissionMultiplier, 0.01f, 3f);
                 settings.SmallEngineSizeMultiplier = ReadFloat(node, "smallEngineSizeMultiplier", settings.SmallEngineSizeMultiplier, 0.05f, 3f);
@@ -275,30 +265,13 @@ namespace PersistentSRBSmoke
                 settings.LargeEngineOpacityMultiplier = ReadFloat(node, "largeEngineOpacityMultiplier", settings.LargeEngineOpacityMultiplier, 0.05f, 2f);
                 settings.SmallEngineSpacingMultiplier = ReadFloat(node, "smallEngineSpacingMultiplier", settings.SmallEngineSpacingMultiplier, 0.2f, 10f);
                 settings.LargeEngineSpacingMultiplier = ReadFloat(node, "largeEngineSpacingMultiplier", settings.LargeEngineSpacingMultiplier, 0.2f, 10f);
-
-                settings.DriftSpeed = ReadFloat(node, "driftSpeed", settings.DriftSpeed, 0f, 20f);
-                settings.DiffusionSpeed = ReadFloat(node, "diffusionSpeed", settings.DiffusionSpeed, 0f, 30f);
-                settings.DiffusionGrowth = ReadFloat(node, "diffusionGrowth", settings.DiffusionGrowth, 0f, 5f);
-                settings.Buoyancy = ReadFloat(node, "buoyancy", settings.Buoyancy, -10f, 10f);
-                settings.DynamicWindResponse = ReadFloat(node, "dynamicWindResponse", settings.DynamicWindResponse, 0f, 20f);
-                settings.TurbulenceStrength = ReadFloat(node, "turbulenceStrength", settings.TurbulenceStrength, 0f, 20f);
-                settings.TurbulenceFrequency = ReadFloat(node, "turbulenceFrequency", settings.TurbulenceFrequency, 0.001f, 2f);
-
-                settings.NearGroundHoldHeight = ReadFloat(node, "nearGroundHoldHeight", settings.NearGroundHoldHeight, 0f, 500f);
-                settings.NearGroundWindMultiplier = ReadFloat(node, "nearGroundWindMultiplier", settings.NearGroundWindMultiplier, 0f, 1f);
-                settings.NearGroundDiffusionMultiplier = ReadFloat(node, "nearGroundDiffusionMultiplier", settings.NearGroundDiffusionMultiplier, 0f, 1f);
-                settings.NearGroundBuoyancyMultiplier = ReadFloat(node, "nearGroundBuoyancyMultiplier", settings.NearGroundBuoyancyMultiplier, 0f, 1f);
-
-                settings.PadCloudEnabled = ReadBool(node, "padCloudEnabled", settings.PadCloudEnabled);
-                settings.PadCloudHeight = ReadFloat(node, "padCloudHeight", settings.PadCloudHeight, 10f, 1000f);
-                settings.PadCloudCellSize = ReadFloat(node, "padCloudCellSize", settings.PadCloudCellSize, 2f, 100f);
-                settings.PadCloudDensityThreshold = ReadFloat(node, "padCloudDensityThreshold", settings.PadCloudDensityThreshold, 1f, 100f);
-                settings.PadCloudDensitySaturation = ReadFloat(node, "padCloudDensitySaturation", settings.PadCloudDensitySaturation, 2f, 300f);
-                settings.PadCloudOutflowSpeed = ReadFloat(node, "padCloudOutflowSpeed", settings.PadCloudOutflowSpeed, 0f, 80f);
-                settings.PadCloudUpdraftSpeed = ReadFloat(node, "padCloudUpdraftSpeed", settings.PadCloudUpdraftSpeed, 0f, 40f);
-                settings.PadCloudGlobalBias = ReadFloat(node, "padCloudGlobalBias", settings.PadCloudGlobalBias, 0f, 1f);
+                settings.SmokeBrightness = ReadFloat(node, "smokeBrightness", settings.SmokeBrightness, 0.1f, 2f);
+                settings.EngineColorVariation = ReadFloat(node, "engineColorVariation", settings.EngineColorVariation, 0f, 0.3f);
+                settings.FullDensityEmitterBudget = ReadInt(node, "fullDensityEmitterBudget", settings.FullDensityEmitterBudget, 1, 64);
+                settings.MinimumEmitterDensityScale = ReadFloat(node, "minimumEmitterDensityScale", settings.MinimumEmitterDensityScale, 0.05f, 1f);
 
                 settings.WindEnabled = ReadBool(node, "windEnabled", settings.WindEnabled);
+                settings.WindCacheLayers = ReadInt(node, "windCacheLayers", settings.WindCacheLayers, 8, 256);
                 settings.WindSpeed = ReadFloat(node, "windSpeed", settings.WindSpeed, 0f, 80f);
                 settings.WindLayerHeight = ReadFloat(node, "windLayerHeight", settings.WindLayerHeight, 100f, 20000f);
                 settings.WindTopAltitude = ReadFloat(node, "windTopAltitude", settings.WindTopAltitude, 1000f, 100000f);
@@ -308,51 +281,55 @@ namespace PersistentSRBSmoke
                 settings.WindSpreadScale = ReadFloat(node, "windSpreadScale", settings.WindSpreadScale, 30f, 5000f);
                 settings.WindSpreadVerticalScale = ReadFloat(node, "windSpreadVerticalScale", settings.WindSpreadVerticalScale, 80f, 20000f);
                 settings.WindSpreadTimeScale = ReadFloat(node, "windSpreadTimeScale", settings.WindSpreadTimeScale, 0f, 0.1f);
-
+                settings.FollowUniversalTime = ReadBool(node, "followUniversalTime", settings.FollowUniversalTime);
+                settings.SuppressStockSmoke = ReadBool(node, "suppressStockSmoke", settings.SuppressStockSmoke);
+                settings.StockSmokeRefreshInterval = ReadFloat(node, "stockSmokeRefreshInterval", settings.StockSmokeRefreshInterval, 0.1f, 10f);
                 settings.DebugLogging = ReadBool(node, "debugLogging", settings.DebugLogging);
             }
             catch (Exception ex)
             {
-                Debug.LogError("[PersistentSRBSmoke] Failed to load settings: " + ex);
+                Debug.LogError("[PersistentSRBSmoke] Failed to load volumetric Settings.cfg: " + ex);
             }
 
-            if (settings.EngineMaxThrust <= settings.EngineMinThrust)
-                settings.EngineMaxThrust = settings.EngineMinThrust + 1f;
-            if (settings.PadCloudDensitySaturation <= settings.PadCloudDensityThreshold)
-                settings.PadCloudDensitySaturation = settings.PadCloudDensityThreshold + 1f;
-            if (settings.DynamicOldAge < settings.DynamicMidAge)
-                settings.DynamicOldAge = settings.DynamicMidAge;
-            if (settings.DynamicOldStride < settings.DynamicMidStride)
-                settings.DynamicOldStride = settings.DynamicMidStride;
-
             return settings;
+        }
+
+        private static void ClampVisibleBudget(SmokeSettings settings)
+        {
+            int total = settings.MaxVisibleSegments;
+            if (total <= settings.MaxStoredSegments)
+                return;
+
+            float scale = settings.MaxStoredSegments / (float)Mathf.Max(1, total);
+            settings.VisibleNearSegments = Mathf.FloorToInt(settings.VisibleNearSegments * scale);
+            settings.VisibleMidSegments = Mathf.FloorToInt(settings.VisibleMidSegments * scale);
+            settings.VisibleFarSegments = Mathf.Max(0, settings.MaxStoredSegments
+                - settings.VisibleNearSegments - settings.VisibleMidSegments);
         }
 
         private static float ReadFloat(ConfigNode node, string key, float fallback, float min, float max)
         {
             string raw = node.GetValue(key);
             float value;
-            if (raw != null && float.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
-                return Mathf.Clamp(value, min, max);
-            return fallback;
+            return raw != null && float.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out value)
+                ? Mathf.Clamp(value, min, max)
+                : fallback;
         }
 
         private static int ReadInt(ConfigNode node, string key, int fallback, int min, int max)
         {
             string raw = node.GetValue(key);
             int value;
-            if (raw != null && int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
-                return Math.Max(min, Math.Min(max, value));
-            return fallback;
+            return raw != null && int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out value)
+                ? Math.Max(min, Math.Min(max, value))
+                : fallback;
         }
 
         private static bool ReadBool(ConfigNode node, string key, bool fallback)
         {
             string raw = node.GetValue(key);
             bool value;
-            if (raw != null && bool.TryParse(raw, out value))
-                return value;
-            return fallback;
+            return raw != null && bool.TryParse(raw, out value) ? value : fallback;
         }
     }
 }

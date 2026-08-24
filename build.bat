@@ -14,4 +14,10 @@ if errorlevel 1 (
   exit /b 1
 )
 
-msbuild PersistentSRBSmoke.sln /t:Build /p:Configuration=Release
+msbuild PersistentSRBSmoke.sln /restore /t:Build /p:Configuration=Release
+if errorlevel 1 exit /b %errorlevel%
+
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-volumetric-assets.ps1
+if errorlevel 1 exit /b %errorlevel%
+
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\volumetric-smoke-contract.ps1 -RequireBundle
