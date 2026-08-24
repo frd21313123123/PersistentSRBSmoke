@@ -5,8 +5,9 @@ using UnityEngine;
 namespace PersistentSRBSmoke
 {
     /// <summary>
-    /// Version-2 configuration for the standalone D3D11 volume renderer. The old particle
-    /// configuration deliberately is not read, so an outdated file cannot silently reactivate it.
+    /// Version-2 configuration for the body-relative smoke simulation and stock-material renderer.
+    /// The old particle configuration deliberately is not read, so an outdated file cannot silently
+    /// reactivate it.
     /// </summary>
     internal sealed class SmokeSettings
     {

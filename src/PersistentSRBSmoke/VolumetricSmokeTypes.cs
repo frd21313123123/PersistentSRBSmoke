@@ -117,8 +117,8 @@ namespace PersistentSRBSmoke
     }
 
     /// <summary>
-    /// Eight float4s: matching the Shader Model 5 StructuredBuffer layout exactly avoids platform
-    /// specific packing ambiguity when Unity uploads the D3D11 segment buffer.
+    /// Legacy GPU layout retained for data compatibility with external diagnostics. The stock renderer
+    /// consumes TrailSegment records directly and does not upload this structure.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     internal struct SegmentGpuData

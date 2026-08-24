@@ -258,8 +258,8 @@ namespace PersistentSRBSmoke
                     : version.Major + "." + version.Minor + "." + version.Build;
                 Debug.Log(
                     "[PersistentSRBSmoke] v" + versionText +
-                    " initialized with standalone D3D11 Hermite volume segments, tile culling, "
-                    + "raymarched lighting, pad tiles, UT time-warp sync and stock-smoke suppression.");
+                    " initialized with body-relative Hermite smoke segments, KSP stock-material "
+                    + "rendering, pad tiles, UT time-warp sync and stock-smoke suppression.");
             }
             catch (Exception ex)
             {

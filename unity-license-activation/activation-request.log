@@ -1,0 +1,14 @@
+[LicensingClient] ERROR Failed to connect to local IPC
+[Licensing::Module] Failed to connect to channel: LicenseClient-jaifl
+[Licensing::Module] Successfully launched the LicensingClient
+[Licensing::Module] Successfully connected to LicensingClient on channel: LicenseClient-jaifl
+[Licensing::Module] Successfully launched and connected to LicensingClient
+Entitlement-based licensing initiated
+[LicensingClient] Licenses Updated successfully in LicensingClient
+
+ Generating manual activation license file.
+
+LICENSE SYSTEM [2026824 18:6:23] License activate file written to: Unity_v2019.4.18f1.alf
+
+ Manual activation license file saved.
+Exiting without the bug reporter. Application will terminate with return code 1

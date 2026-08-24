@@ -88,8 +88,8 @@ namespace PersistentSRBSmoke
 
         private static Material GetShadowMaterial(VolumetricSmokeSystem system)
         {
-            // Renderer owns the bundle lifetime. The shadow shader is intentionally a separate
-            // asset so it cannot fall back to a stock particle material.
+            // The renderer owns the generated soft texture and returns a separate stock-material
+            // instance for this mesh, so shadow-layer cleanup cannot invalidate smoke rendering.
             return system == null ? null : system.CreateShadowMaterial();
         }
 
