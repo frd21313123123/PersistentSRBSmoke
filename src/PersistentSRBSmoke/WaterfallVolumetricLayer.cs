@@ -86,6 +86,7 @@ namespace PersistentSRBSmoke
             public float StartLifetime;
             public float BirthDiameter;
             public float SizeMultiplier;
+            public CellKey Key;
             public bool Active;
         }
 
@@ -93,6 +94,11 @@ namespace PersistentSRBSmoke
         private readonly Dictionary<CellKey, CellAccumulator> _cells =
             new Dictionary<CellKey, CellAccumulator>(512);
         private readonly List<CellAccumulator> _orderedCells = new List<CellAccumulator>(512);
+        // Slots are deliberately retained by cell key.  Reassigning a proxy by list index makes
+        // Waterfall's noise seed jump between unrelated parts of the plume every snapshot.
+        private readonly Dictionary<CellKey, VolumeSlot> _slotsByKey =
+            new Dictionary<CellKey, VolumeSlot>(512);
+        private readonly HashSet<CellKey> _selectedKeys = new HashSet<CellKey>();
 
         private GameObject _root;
         private Material _material;
@@ -101,6 +107,7 @@ namespace PersistentSRBSmoke
         private bool _disposed;
         private float _nextInitializationAttempt;
         private int _activeCount;
+        private float _stableCellSize;
         private bool _cameraModeAllowsRendering;
         private bool _hasConfirmedVisibleVolume;
         private string _status = "not initialized";
@@ -166,24 +173,8 @@ namespace PersistentSRBSmoke
             }
 
             int maximumVolumes = Mathf.Max(8, _settings.WaterfallVolumetricMaxVolumes);
-            float cellSize = Mathf.Max(12f, _settings.WaterfallVolumetricCellSize);
-
-            // A long trail is mostly one-dimensional. Increase the aggregation length smoothly as
-            // occupancy grows, then refine from the observed cell count. This retains the whole
-            // trail instead of selecting only the densest launch-pad cells.
-            float occupancyFactor = count / Mathf.Max(1f, maximumVolumes * 80f);
-            cellSize *= Mathf.Clamp(occupancyFactor, 1f, 4f);
-
-            const int maximumAggregationPasses = 6;
-            for (int pass = 0; pass < maximumAggregationPasses; pass++)
-            {
-                BuildCells(particles, count, body, cellSize);
-                if (_cells.Count <= maximumVolumes || pass == maximumAggregationPasses - 1)
-                    break;
-
-                float excess = _cells.Count / (float)maximumVolumes;
-                cellSize *= Mathf.Clamp(Mathf.Pow(excess, 0.55f), 1.20f, 2.25f);
-            }
+            float cellSize = SelectStableCellSize(count, maximumVolumes);
+            BuildCells(particles, count, body, cellSize);
 
             _orderedCells.Clear();
             foreach (KeyValuePair<CellKey, CellAccumulator> pair in _cells)
@@ -195,15 +186,41 @@ namespace PersistentSRBSmoke
                 _orderedCells.RemoveRange(maximumVolumes, _orderedCells.Count - maximumVolumes);
             }
 
+            _selectedKeys.Clear();
+            for (int i = 0; i < _orderedCells.Count; i++)
+                _selectedKeys.Add(_orderedCells[i].Key);
+
+            // Expire cells first so a newly selected cell can claim a free slot.  Swapping slots
+            // in the dense active range is safe: the dictionary stores object references, not
+            // array indices.
+            for (int i = _activeCount - 1; i >= 0; i--)
+            {
+                VolumeSlot slot = _slots[i];
+                if (!_selectedKeys.Contains(slot.Key))
+                {
+                    _slotsByKey.Remove(slot.Key);
+                    RemoveActiveSlotAt(i);
+                }
+            }
+
             double snapshotClock = GetSimulationClock();
-            int targetCount = Mathf.Min(_orderedCells.Count, _slots.Length);
-            for (int i = 0; i < targetCount; i++)
-                ApplyCellToSlot(_orderedCells[i], _slots[i], body, cellSize, snapshotClock);
+            for (int i = 0; i < _orderedCells.Count; i++)
+            {
+                CellAccumulator cell = _orderedCells[i];
+                VolumeSlot slot;
+                if (!_slotsByKey.TryGetValue(cell.Key, out slot) || !slot.Active)
+                {
+                    _slotsByKey.Remove(cell.Key);
+                    if (_activeCount >= _slots.Length)
+                        break;
 
-            for (int i = targetCount; i < _activeCount; i++)
-                DisableSlot(_slots[i]);
+                    slot = _slots[_activeCount++];
+                    slot.Key = cell.Key;
+                    _slotsByKey[cell.Key] = slot;
+                }
 
-            _activeCount = targetCount;
+                ApplyCellToSlot(cell, slot, body, cellSize, snapshotClock);
+            }
             PrepareFlightCamera();
             return true;
         }
@@ -284,6 +301,9 @@ namespace PersistentSRBSmoke
             _hasConfirmedVisibleVolume = false;
             _cells.Clear();
             _orderedCells.Clear();
+            _slotsByKey.Clear();
+            _selectedKeys.Clear();
+            _stableCellSize = 0f;
         }
 
         private bool TryInitialize()
@@ -447,9 +467,50 @@ namespace PersistentSRBSmoke
                 cell.Weight += weight;
                 cell.AlphaSum += alpha;
                 cell.Count++;
-                cell.Seed ^= particle.randomSeed + 0x9E3779B9U + (cell.Seed << 6) + (cell.Seed >> 2);
                 _cells[key] = cell;
             }
+        }
+
+        private float SelectStableCellSize(int particleCount, int maximumVolumes)
+        {
+            float baseCellSize = Mathf.Max(12f, _settings.WaterfallVolumetricCellSize);
+            float occupancy = particleCount / Mathf.Max(1f, maximumVolumes * 80f);
+            float desired = baseCellSize * Mathf.Clamp(occupancy, 1f, 4f);
+
+            if (_stableCellSize <= 0f)
+            {
+                _stableCellSize = QuantizeCellSize(baseCellSize, desired);
+            }
+            else if (desired > _stableCellSize * 1.25f || desired < _stableCellSize * 0.70f)
+            {
+                // LOD changes are intentionally hysteretic and quantized.  A continuously
+                // changing grid was re-binning the entire trail four times per second.
+                float nextSize = QuantizeCellSize(baseCellSize, desired);
+                if (!Mathf.Approximately(nextSize, _stableCellSize))
+                {
+                    _stableCellSize = nextSize;
+                    ClearSlotAssignments();
+                }
+            }
+
+            return _stableCellSize;
+        }
+
+        private static float QuantizeCellSize(float baseCellSize, float desired)
+        {
+            float ratio = Mathf.Max(1f, desired / Mathf.Max(0.001f, baseCellSize));
+            // Half-octave steps retain a useful trail length while avoiding constant remapping.
+            float halfOctaves = Mathf.Round(Mathf.Log(ratio, 2f) * 2f) * 0.5f;
+            return baseCellSize * Mathf.Pow(2f, Mathf.Clamp(halfOctaves, 0f, 2f));
+        }
+
+        private void ClearSlotAssignments()
+        {
+            for (int i = 0; i < _activeCount; i++)
+                DisableSlot(_slots[i]);
+
+            _activeCount = 0;
+            _slotsByKey.Clear();
         }
 
         private void ApplyCellToSlot(
@@ -714,7 +775,9 @@ namespace PersistentSRBSmoke
             if (_slots == null || index < 0 || index >= _activeCount)
                 return;
 
-            DisableSlot(_slots[index]);
+            VolumeSlot removedSlot = _slots[index];
+            _slotsByKey.Remove(removedSlot.Key);
+            DisableSlot(removedSlot);
             int last = _activeCount - 1;
             _activeCount = last;
             if (index < last)
@@ -739,6 +802,8 @@ namespace PersistentSRBSmoke
             }
             _slots = null;
             _activeCount = 0;
+            _slotsByKey.Clear();
+            _selectedKeys.Clear();
             _initialized = false;
         }
 
